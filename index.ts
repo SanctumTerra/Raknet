@@ -9,6 +9,7 @@ import { OhMyNewIncommingConnection } from "./src/packets/raknet/OhMyNewIncommin
 import { Serialize } from "./src/packets/serialize";
 import { Logger } from "./src/utils/Logger";
 import { RakNetClient } from "./src/client/RaknetClient";
+import { Advertisement } from "./src/client/RaknetClient";
 
 export {
     PacketHandler,
@@ -19,7 +20,8 @@ export {
     OhMyNewIncommingConnection,
     Serialize,
     Logger,
-    RakNetClient
+    RakNetClient,
+    Advertisement
 }
 
 export default RakNetClient
