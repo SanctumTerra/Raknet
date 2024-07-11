@@ -6,5 +6,5 @@ build
 index.ts
 package-lock.json
 !dist/*
-github
+.github/
 build.js
