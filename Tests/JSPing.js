@@ -1,4 +1,4 @@
-const { RakNetClient } = require("../dist/index");
+const { RakNetClient } = require("../index");
 
 const client = new RakNetClient("127.0.0.1", 19132);
 
