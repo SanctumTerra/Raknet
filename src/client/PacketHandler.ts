@@ -1,4 +1,19 @@
-import { Ack, Address, Frame, Nack, OpenConnectionReply1, OpenConnectionRequest1, OpenConnectionRequest2, Packet, Priority, Reliability, UnconnectedPing } from "@serenityjs/raknet";
+import { 
+    Ack,
+    Address, 
+    MAX_MTU_SIZE, 
+    DGRAM_MTU_OVERHEAD, 
+    Frame, 
+    Nack, 
+    OpenConnectionReply1, 
+    OpenConnectionRequest1, 
+    OpenConnectionRequest2, 
+    Packet, 
+    Priority, 
+    Reliability, 
+    UnconnectedPing,
+    Bitflags
+} from "@serenityjs/raknet";
 import { RakNetClient } from "./RaknetClient";
 import { FrameHandler } from "./FrameHandler";
 import { NewConnectionRequest } from "../packets/raknet/NewConnectionRequest";
@@ -16,48 +31,47 @@ export  class PacketHandler {
     public handleIncoming(buffer: Buffer){
         const packetId = buffer.readUint8();
         const ignore = [132, 192, 128]
-       if(!ignore.includes(packetId)) Logger.debug("Received Packet ID " + packetId)
+        if(!ignore.includes(packetId)) Logger.debug("Received Packet ID " + packetId)
+
         switch (packetId) {
-            case 254:
-                process.exit(0);
-                break;
+            case Bitflags.Valid+44: 
+                this.framehandler.handleFrameSet(buffer);
+            break;
             case Packet.OpenConnectionReply1:
                 this.handleOpenConnectionRequest2(buffer);
                 break;
             case Packet.OpenConnectionReply2:
                 this.handleOpenConnectionRequest();
                 break;
-            case Packet.Ack:
-                Logger.debug(new Ack(buffer).deserialize());
-                break;
-            case Packet.Nack:
-                Logger.debug(new Nack(buffer).deserialize());
-                break;
-            case 128:
-            case 129:
-            case 130: 
-            case 131:
-            case 132:
-            case 134:
-            case 135:
-            case 136:
-            case 137:
-            case 138:
-            case 139:
-            case 140:
-            case 141:
-                this.framehandler.handleFrameSet(buffer);
-                break;
             default:
+                this.otherPackets(buffer)
                 Logger.debug('Received unknown packet ' + packetId);
         }
     }
+
+    public otherPackets(buffer: Buffer){
+        const packetId = buffer.readUint8() & 0xf0;
+        switch (packetId) {
+            case Bitflags.Valid:
+                this.framehandler.handleFrameSet(buffer);
+                break;
+            case Packet.Ack:
+                //this.ack(buffer);
+                break;
+            case Packet.Nack:
+                //Logger.debug(new Nack(buffer).deserialize());
+                break;
+            default:
+                break;
+        }
+    }
+
 
 
     public handleOpenConnectionRequest2(buffer: Buffer){
         const reply2 = new OpenConnectionReply1(buffer).deserialize();
         const pak = new OpenConnectionRequest2();
-        pak.mtu = 1492;
+        pak.mtu = 1024;
         pak.client = this.client.id;
         pak.magic = reply2.magic;
         pak.address = new Address(this.client.socket.address().address, this.client.socket.address().port, 4);
@@ -85,8 +99,8 @@ export  class PacketHandler {
             "binary"
         );
         packet.protocol = this.client.protocol;
-        packet.mtu = 1464;
-    
+        packet.mtu = 1024-DGRAM_MTU_OVERHEAD;
+
         const serializedPacket = packet.serialize(); 
         this.client.send(serializedPacket);
     }

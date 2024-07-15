@@ -9,8 +9,8 @@ export class FrameHandler {
     private lastInputSequence: number = -1;
     private receivedFrameSequences: Set<number> = new Set();
     private lostFrameSequences: Set<number> = new Set();
-    private inputHighestSequenceIndex: number[] = new Array(32).fill(0);
-    private inputOrderIndex: number[] = new Array(32).fill(0);
+    private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
+    private inputOrderIndex: number[] = new Array(64).fill(0);
 
     protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
 	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> =
@@ -21,9 +21,10 @@ export class FrameHandler {
 
     constructor(raknet: RakNetClient) {
         this.raknet = raknet;
-		for (let index = 0; index < 32; index++) {
+		for (let index = 0; index < 64; index++) {
 			this.inputOrderingQueue.set(index, new Map());
 		}
+
         this.raknet.on("tick", () => {
             this.tick();
         })
@@ -91,14 +92,22 @@ export class FrameHandler {
     }
 
     private handleFrame(frame: Frame): void {
-        if (frame.isSplit()) return this.handleFragment(frame);
-        else if (frame.isSequenced()) return this.handleSequenced(frame);
-        else if (frame.isOrdered()) this.handleOrdered(frame); 
-        else this.processFrame(frame);        
+        Logger.debug(`Handling frame: reliability=${frame.reliability}, orderIndex=${frame.orderIndex}, sequenceIndex=${frame.sequenceIndex}`);
+    
+        if (frame.isSplit()) {
+            this.handleFragment(frame);
+        } else if (frame.isSequenced()) {
+            this.handleSequenced(frame);
+        } else if (frame.isOrdered()) {
+            this.handleOrdered(frame);
+        } else {
+            this.processFrame(frame);
+        }
     }
 
     private processFrame(frame: Frame): void {
 		const header = frame.payload[0] as number;
+    
         switch (header) {
             case Packet.ConnectionRequestAccepted:
                 this.handleConnectionRequestAccepted(frame);
@@ -113,77 +122,90 @@ export class FrameHandler {
     }
 
     private handleFragment(frame: Frame): void {
-        if (this.fragmentsQueue.has(frame.splitId)) {
-            const fragment = this.fragmentsQueue.get(frame.splitId);
-			if (!fragment) return;
-            fragment.set(frame.splitIndex, frame);
-            if (fragment.size === frame.splitSize) {
-                const stream = new BinaryStream();
-				for (let index = 0; index < fragment.size; index++) {
-					const sframe = fragment.get(index) as Frame;
-					stream.writeBuffer(sframe.payload);
-				}
-
-                const nframe = new Frame();
-                nframe.reliability = frame.reliability;
-                nframe.reliableIndex = frame.reliableIndex;
-                nframe.sequenceIndex = frame.sequenceIndex;
-                nframe.orderIndex = frame.orderIndex;
-                nframe.orderChannel = frame.orderChannel;
-                nframe.payload = stream.getBuffer();
-                this.fragmentsQueue.delete(frame.splitId);
-                return this.handleFrame(nframe);
+        Logger.debug(`Handling fragment: splitId=${frame.splitId}, splitIndex=${frame.splitIndex}, splitSize=${frame.splitSize}`);
+    
+        if (!this.fragmentsQueue.has(frame.splitId)) {
+            this.fragmentsQueue.set(frame.splitId, new Map());
+        }
+    
+        const fragment = this.fragmentsQueue.get(frame.splitId);
+        if (!fragment) return;
+    
+        fragment.set(frame.splitIndex, frame);
+    
+        if (fragment.size === frame.splitSize) {
+            Logger.debug(`Reassembling complete frame from fragments: splitId=${frame.splitId}`);
+            this.reassembleAndProcessFragment(frame, fragment);
+        }
+    }
+    
+    private reassembleAndProcessFragment(frame: Frame, fragment: Map<number, Frame>): void {
+        const stream = new BinaryStream();
+        for (let index = 0; index < fragment.size; index++) {
+            const sframe = fragment.get(index);
+            if (sframe) {
+                stream.writeBuffer(sframe.payload);
+            } else {
+                Logger.error(`Missing fragment at index ${index} for splitId=${frame.splitId}`);
+                return;
             }
-        } else {
-			this.fragmentsQueue.set(
-				frame.splitId,
-				new Map([[frame.splitIndex, frame]])
-			);
-		}
+        }
+    
+        const reassembledFrame = new Frame();
+        reassembledFrame.reliability = frame.reliability;
+        reassembledFrame.reliableIndex = frame.reliableIndex;
+        reassembledFrame.sequenceIndex = frame.sequenceIndex;
+        reassembledFrame.orderIndex = frame.orderIndex;
+        reassembledFrame.orderChannel = frame.orderChannel;
+        reassembledFrame.payload = stream.getBuffer();
+    
+        this.fragmentsQueue.delete(frame.splitId);
+        this.handleFrame(reassembledFrame);
     }
 
     private handleSequenced(frame: Frame): void {
-        if (
-            frame.sequenceIndex <
-                (this.inputHighestSequenceIndex[frame.orderChannel] as number) ||
-            frame.orderIndex < (this.inputOrderIndex[frame.orderChannel] as number)
-        ) {
-            return Logger.debug(
-                `Recieved out of order frame ${frame.sequenceIndex}!`
-            );
+        const currentHighestSequence = this.inputHighestSequenceIndex[frame.orderChannel];
+        Logger.debug(`Handling sequenced frame: sequenceIndex=${frame.sequenceIndex}, currentHighest=${currentHighestSequence}`);
+    
+        if (frame.sequenceIndex > currentHighestSequence) {
+            this.inputHighestSequenceIndex[frame.orderChannel] = frame.sequenceIndex;
+            this.processFrame(frame);
+        } else {
+            Logger.debug(`Discarding old sequenced frame: ${frame.sequenceIndex}`);
         }
-        this.inputHighestSequenceIndex[frame.orderChannel] =
-            frame.sequenceIndex + 1;
-        return this.processFrame(frame);
     }
 
     private handleOrdered(frame: Frame): void {
-        if (frame.orderIndex === this.inputOrderIndex[frame.orderChannel]) {
-            this.inputHighestSequenceIndex[frame.orderChannel] = 0;
-            this.inputOrderIndex[frame.orderChannel] = frame.orderIndex + 1;
-            this.processFrame(frame);
-            let index = this.inputOrderIndex[frame.orderChannel] as number;
-            const outOfOrderQueue = this.inputOrderingQueue.get(
-                frame.orderChannel
-            ) as Map<number, Frame>;
-
-            for (; outOfOrderQueue.has(index); index++) {
-                const frame = outOfOrderQueue.get(index);
-                if (!frame) break;
-                this.processFrame(frame);
-                outOfOrderQueue.delete(index);
-            }
-            this.inputOrderingQueue.set(frame.orderChannel, outOfOrderQueue);
-            this.inputOrderIndex[frame.orderChannel] = index;
-        } else if (
-            frame.orderIndex > (this.inputOrderIndex[frame.orderChannel] as number)
-        ) {
-            const unordered = this.inputOrderingQueue.get(frame.orderChannel);
-            if (!unordered) return;
-            unordered.set(frame.orderIndex, frame);
+        Logger.debug(`Handling ordered frame: orderIndex=${frame.orderIndex}, channel=${frame.orderChannel}`);
+    
+        const expectedOrderIndex = this.inputOrderIndex[frame.orderChannel];
+        const outOfOrderQueue = this.inputOrderingQueue.get(frame.orderChannel) as Map<number, Frame>;
+    
+        if (frame.orderIndex === expectedOrderIndex) {
+            this.processOrderedFrames(frame, outOfOrderQueue);
+        } else if (frame.orderIndex > expectedOrderIndex) {
+            Logger.debug(`Queuing out-of-order frame: ${frame.orderIndex}`);
+            outOfOrderQueue.set(frame.orderIndex, frame);
         } else {
-			return this.processFrame(frame);
-		}
+            Logger.debug(`Discarding old frame: ${frame.orderIndex}`);
+        }
+    }
+
+    private processOrderedFrames(frame: Frame, outOfOrderQueue: Map<number, Frame>): void {
+        this.processFrame(frame);
+        this.inputOrderIndex[frame.orderChannel]++;
+    
+        let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
+        while (outOfOrderQueue.has(nextOrderIndex)) {
+            const nextFrame = outOfOrderQueue.get(nextOrderIndex);
+            if (nextFrame) {
+                Logger.debug(`Processing queued frame: ${nextOrderIndex}`);
+                this.processFrame(nextFrame);
+                outOfOrderQueue.delete(nextOrderIndex);
+                this.inputOrderIndex[frame.orderChannel]++;
+                nextOrderIndex++;
+            }
+        }
     }
 
     private handleConnectedPing(buffer: Buffer): void {

@@ -23,5 +23,4 @@ export {
     RakNetClient,
     Advertisement
 }
-
 export default RakNetClient

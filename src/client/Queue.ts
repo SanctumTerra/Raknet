@@ -2,17 +2,16 @@ import { DGRAM_HEADER_SIZE, DGRAM_MTU_OVERHEAD, Frame, FrameSet, Priority, Rakne
 import { RakNetClient} from './RaknetClient';
 
 export class Queue {
-	public outputBackupQueue = new Map<number, Array<Frame>>();
 	public outputOrderIndex: Array<number>;
 	public outputSequenceIndex: Array<number>;
 	public outputFrameQueue: FrameSet;
-	public mtu: number = 1492;
+	public mtu: number = 1024;
 
 	protected outputSequence = 0;
 	protected outputsplitIndex = 0;
 	protected outputReliableIndex = 0;
 	protected outputFrames = new Set<Frame>();
-	protected outputBackup = new Map<number, Array<Frame>>();
+	public outputBackup = new Map<number, Array<Frame>>();
 
 	protected client: RakNetClient;
 
