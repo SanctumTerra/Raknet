@@ -21,6 +21,9 @@ export class FrameHandler {
 
     constructor(raknet: RakNetClient) {
         this.raknet = raknet;
+		for (let index = 0; index < 32; index++) {
+			this.inputOrderingQueue.set(index, new Map());
+		}
         this.raknet.on("tick", () => {
             this.tick();
         })
@@ -163,6 +166,7 @@ export class FrameHandler {
             const outOfOrderQueue = this.inputOrderingQueue.get(
                 frame.orderChannel
             ) as Map<number, Frame>;
+
             for (; outOfOrderQueue.has(index); index++) {
                 const frame = outOfOrderQueue.get(index);
                 if (!frame) break;
