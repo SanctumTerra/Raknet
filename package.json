@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "",
   "main": "dist/index.js",
   "emitDeclarationOnly": true,
@@ -18,13 +18,16 @@
   "devDependencies": {
     "@swc/core": "^1.6.13",
     "@swc/helpers": "^0.5.11",
+    "@types/bun": "^1.1.6",
     "@types/node": "^20.14.10",
     "typescript": "^5.5.3"
   },
   "dependencies": {
     "@serenityjs/binarystream": "^2.6.6",
-    "@serenityjs/raknet": "^0.3.6",
+    "@serenityjs/raknet": "0.4.0-beta-20240715032912",
     "chalk": "^4.1.2",
+    "i": "^0.3.7",
+    "npm": "^10.8.2",
     "path": "^0.12.7"
   }
 }

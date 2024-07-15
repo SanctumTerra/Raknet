@@ -31,7 +31,7 @@ class RakNetClient extends EventEmitter {
   private isBusy: boolean = false;
   public queue: Queue;
   
-  public status: Status = Status.Disconnected;
+  public status: Status;
   public static debug = false;
 
   public clientAdress: Address = new Address('0.0.0.0', 0, 4);
@@ -43,9 +43,9 @@ class RakNetClient extends EventEmitter {
     this.socket = dgram.createSocket('udp4');
     this.connected = false;
     this.id = BigInt(Array.from({ length: 20 }, () => Math.floor(Math.random() * 10)).join(''));
+	this.status = Status.Disconnected;
     this.packetHandler = new PacketHandler(this);
 	this.queue = new Queue(this);
-
     setInterval(() => {
 		this.emit("tick");
 	}, 50);

@@ -8,11 +8,16 @@
     "moduleResolution": "node",
     "outDir": "dist",
     "baseUrl": ".", 
+    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,    
     "paths": {
       "*": ["./*"]
     }
   },
+  "exclude": [
+    "*/node_modules/",
+    "dist"
+  ],
   "ts-node": {
     "swc": true, 
     "transpileOnly": true 
