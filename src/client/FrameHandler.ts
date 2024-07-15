@@ -3,6 +3,7 @@ import { RakNetClient } from "./RaknetClient";
 import { OhMyNewIncommingConnection } from "../packets/raknet/OhMyNewIncommingConnection";
 import { BinaryStream } from "@serenityjs/binarystream";
 import { Logger } from "../utils/Logger";
+import { OhMyConnectionRequestAccepted } from "../packets/raknet/OhMyConnectionRequestAccepted";
 
 
 export class FrameHandler {
@@ -224,22 +225,47 @@ export class FrameHandler {
         this.raknet.queue.sendFrame(frame, Priority.Immediate);
     }
 
+    handleConnectionRequestAcceptedTwo(frame: Frame){
+        let des = new OhMyConnectionRequestAccepted(frame.payload).deserialize();
+
+        let packet = new OhMyNewIncommingConnection();
+            packet.internalAddress = new Array<Address>()
+            for (let i = 0; i < 10; i++) {
+                packet.internalAddress[i] = new Address('0.0.0.0', 0, 4);
+            }
+            packet.serverAddress = des.serverAddress
+            packet.incomingTimestamp = BigInt(Date.now());
+            packet.serverTimestamp = des.serverTimestamp; 
+        return packet;
+    }
+
     private handleConnectionRequestAccepted(frame: Frame): void {
-        const IncomingPacket = new ConnectionRequestAccepted(frame.payload);
-        const des = IncomingPacket.deserialize();
-        if (!des) {
+        let des;
+
+        let packet;
+
+        try {
+            const IncomingPacket = new ConnectionRequestAccepted(frame.payload);
+            des = IncomingPacket.deserialize();
+
+            packet = new OhMyNewIncommingConnection();
+            packet.internalAddress = new Array<Address>()
+            for (let i = 0; i < 10; i++) {
+                packet.internalAddress[i] = new Address('0.0.0.0', 0, 4);
+            }
+            packet.serverAddress = new Address(des.address.address, des.address.port, 4);
+            packet.incomingTimestamp = BigInt(Date.now());
+            packet.serverTimestamp = des.timestamp; 
+        } catch(error){
+            packet = this.handleConnectionRequestAcceptedTwo(frame);
+        }
+
+        if (!packet) {
             console.error('Failed to deserialize IncomingPacket!');
             return;
         }
-
-        const packet = new OhMyNewIncommingConnection();
-        packet.internalAddress = new Array<Address>()
-        for (let i = 0; i < 10; i++) {
-            packet.internalAddress[i] = new Address('0.0.0.0', 0, 4);
-        }
-        packet.serverAddress = new Address(des.address.address, des.address.port, 4);
-        packet.incomingTimestamp = BigInt(Date.now());
-        packet.serverTimestamp = des.timestamp; 
+        console.log('packet ', packet)
+        
 
         const sendFrame = new Frame();
         sendFrame.reliability = Reliability.ReliableOrdered;
