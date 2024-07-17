@@ -84,7 +84,7 @@ export class Queue {
 	private queueFrame(frame: Frame, priority: Priority): void {
 		let length = DGRAM_HEADER_SIZE;
 		for (const frame of this.outputFrames) length += frame.getByteLength();
-		if (length + frame.getByteLength() > this.mtu - DGRAM_MTU_OVERHEAD)
+		if (length + frame.getByteLength() > this.mtu - 36)
 			this.sendQueue(this.outputFrames.size);
 		this.outputFrames.add(frame);
 		if (priority === Priority.Immediate) return this.sendQueue(1);

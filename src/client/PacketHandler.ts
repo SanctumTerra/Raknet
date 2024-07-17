@@ -1,10 +1,6 @@
-import { 
-    Ack,
+import {
     Address, 
-    MAX_MTU_SIZE, 
-    DGRAM_MTU_OVERHEAD, 
     Frame, 
-    Nack, 
     OpenConnectionReply1, 
     OpenConnectionRequest1, 
     OpenConnectionRequest2, 
@@ -34,7 +30,7 @@ export  class PacketHandler {
         if(!ignore.includes(packetId)) Logger.debug("Received Packet ID " + packetId)
 
         switch (packetId) {
-            case Bitflags.Valid+44: 
+            case Bitflags.Valid: 
                 this.framehandler.handleFrameSet(buffer);
             break;
             case Packet.OpenConnectionReply1:
@@ -44,7 +40,7 @@ export  class PacketHandler {
                 this.handleOpenConnectionRequest();
                 break;
             default:
-                this.otherPackets(buffer)
+                this.otherPackets(buffer);
                 Logger.debug('Received unknown packet ' + packetId);
         }
     }
@@ -99,7 +95,7 @@ export  class PacketHandler {
             "binary"
         );
         packet.protocol = this.client.protocol;
-        packet.mtu = 1024-DGRAM_MTU_OVERHEAD;
+        packet.mtu = 1024 - 36;
         const serializedPacket = packet.serialize(); 
         this.client.send(serializedPacket);
     }
