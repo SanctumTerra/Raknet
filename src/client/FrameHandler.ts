@@ -263,10 +263,8 @@ export class FrameHandler {
         if (!packet) {
             console.error('Failed to deserialize IncomingPacket!');
             return;
-        }
-        console.log('packet ', packet)
+        }        
         
-
         const sendFrame = new Frame();
         sendFrame.reliability = Reliability.ReliableOrdered;
         sendFrame.orderChannel = 0;

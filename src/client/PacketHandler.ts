@@ -100,7 +100,6 @@ export  class PacketHandler {
         );
         packet.protocol = this.client.protocol;
         packet.mtu = 1024-DGRAM_MTU_OVERHEAD;
-
         const serializedPacket = packet.serialize(); 
         this.client.send(serializedPacket);
     }
