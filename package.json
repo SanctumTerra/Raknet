@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "",
   "main": "dist/index.js",
   "emitDeclarationOnly": true,
@@ -12,6 +12,12 @@
     "dev": "node ./build.js && node ./dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "maintainers": [
+    {
+    "name": "SanctumTerra",
+    "url": "https://github.com/TerraOfficial"
+    }
+  ],
   "keywords": [],
   "author": "",
   "license": "ISC",
