@@ -1,0 +1,25 @@
+{
+  "name": "@sanctumterra/raknet",
+  "module": "src/index.ts",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "version": "1.0.18",
+  "scripts": {
+    "test": "bun run ./src/tools/test.ts",
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'bun run ./src/tools/test.ts'",
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "nodemon": "^3.1.4",
+    "tsup": "^8.2.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@serenityjs/binarystream": "^2.6.6",
+    "@serenityjs/raknet": "^0.4.3",
+    "@types/node": "^22.5.0"
+  }
+}
