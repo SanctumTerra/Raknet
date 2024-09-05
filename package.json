@@ -3,7 +3,7 @@
   "module": "src/index.ts",
   "main": "dist/index.js",
   "type": "commonjs",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "scripts": {
     "test": "bun run ./src/tools/test.ts",
     "dev": "nodemon --watch 'src/**/*.ts' --exec 'bun run ./src/tools/test.ts'",
