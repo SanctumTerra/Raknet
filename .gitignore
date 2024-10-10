@@ -176,5 +176,8 @@ dist
 .DS_Store
 
 # Bun
-bun.lockb
 bun-cache
+
+#Locks
+bun.lockb
+package-lock.json

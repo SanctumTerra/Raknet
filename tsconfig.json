@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    // Enable latest features
     "lib": ["ESNext", "DOM"],
     "target": "ESNext",
     "module": "CommonJS",
@@ -9,25 +8,20 @@
     "allowJs": true,
     "outDir": "./dist",
 
-    // Bundler mode
     "moduleResolution": "node",
     "esModuleInterop": true,
 
-    // Best practices
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
 
-    // Some stricter flags (disabled by default)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
 
-    // Enable experimental decorators
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
 
-    // Allow compilation
     "noEmit": false
   },
   "include": ["src/**/*"],
