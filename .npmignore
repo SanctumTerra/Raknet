@@ -3,3 +3,4 @@ src/
 .gitignore
 biome.json
 package-lock.json
+index.ts
