@@ -1,14 +1,19 @@
-# raknet
+# Raknet Client
 
-To install dependencies:
-
-```bash
-bun install
-```
-
-To run:
+### Installation
 
 ```bash
-bun run index.ts
+npm install @sanctumterra/raknet
+bun install @sanctumterra/raknet
 ```
 
+### Usage
+
+```ts
+import { Client } from "@sanctumterra/raknet";
+
+const client = new Client({
+  host: "127.0.0.1",
+  port: 19132
+});
+```
