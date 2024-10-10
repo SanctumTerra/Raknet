@@ -31,7 +31,7 @@ class Client extends Emitter<ClientEvents> {
 			this.tick++;
 			this.emit("tick");
 		}, 50);
-		this.tick++; // Tick once to prevent 0 in receiver after connect is called!
+		this.tick++; 
 		this.status = Status.Connecting;
 		const advertisement = await this.ping();
 		await Sender.connect(this);
@@ -43,8 +43,7 @@ class Client extends Emitter<ClientEvents> {
 	}
 
 	public send(packet: Buffer) {
-		// @ts-expect-error Buffer is not typed as Uint8Array
-		this.socket.send(packet, this.options.port, this.options.host);
+		this.socket.send([packet], this.options.port, this.options.host);
 	}
 
 	public close() {
