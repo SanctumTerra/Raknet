@@ -2,7 +2,8 @@
   "name": "@sanctumterra/raknet",
   "version": "1.1.0",
   "module": "index.ts",
-  "type": "module",
+  "main": "./dist/index.js",
+  "type": "commonjs",
   "scripts": {
     "build": "tsc --outDir ./dist --project ./tsconfig.json",
     "format": "npx @biomejs/biome format --write ./src",
