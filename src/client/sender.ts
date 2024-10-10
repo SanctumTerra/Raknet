@@ -242,7 +242,9 @@ class Sender {
 			client.send(packet.serialize());
 			const timer = setTimeout(() => {
 				reject(
-					new Error(`Connection request has timed out after ${client.options.timeout}ms.`),
+					new Error(
+						`Connection request has timed out after ${client.options.timeout}ms.`,
+					),
 				);
 				client.socket.off("message", listener);
 				clearTimeout(timer);
