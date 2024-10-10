@@ -30,8 +30,15 @@ jobs:
         run: npm run format
       - name: Build
         run: npm run build
+      - name: Verify npm user
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Check if package can be published
+        run: npm publish --dry-run
       - name: Publish package
         run: npm publish --access=public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    
