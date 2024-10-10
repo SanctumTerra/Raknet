@@ -1,7 +1,13 @@
 {
   "name": "@sanctumterra/raknet",
+  "version": "1.1.0",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "build": "tsc --outDir ./dist --project ./tsconfig.json",
+    "format": "npx @biomejs/biome format --write ./src",
+    "lint": "npx @biomejs/biome lint --write ./src"
+  },
   "devDependencies": {
     "@biomejs/biome": "1.9.3",
     "@types/bun": "latest"
@@ -10,6 +16,8 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@serenityjs/binarystream": "^2.6.6"
+    "@serenityjs/binarystream": "^2.6.6",
+    "@serenityjs/emitter": "^0.5.2",
+    "@serenityjs/raknet": "^0.6.0-beta-20241005152757"
   }
 }
