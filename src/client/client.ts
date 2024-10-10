@@ -35,6 +35,7 @@ class Client extends Emitter<ClientEvents> {
 		this.status = Status.Connecting;
 		const advertisement = await this.ping();
 		await Sender.connect(this);
+		this.emit("connect");
 		return advertisement;
 	}
 

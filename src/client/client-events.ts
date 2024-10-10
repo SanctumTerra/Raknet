@@ -14,6 +14,7 @@ interface ClientEvents {
 	"open-connection-second-reply": [OpenConnectionSecondReply];
 	frameset: [FrameSet];
 	encapsulated: [Frame];
+	connect: [];
 }
 
 export type { ClientEvents };
