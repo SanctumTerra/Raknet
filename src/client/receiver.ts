@@ -60,6 +60,10 @@ class Receiver {
 			case Bitflags.Valid:
 				this.handleValidPacket(packet);
 				break;
+			case Packet.Ack: {
+				this.client.emit("ack", new Ack(packet).deserialize());
+				break;
+			}
 			default:
 				if (this.client.options.debug)
 					console.debug(`Received unknown packet: ${packetType}`);
@@ -225,12 +229,23 @@ class Receiver {
 		const header = frame.payload[0] as number;
 
 		switch (header) {
-			case Packet.ConnectionRequestAccepted:
+			case Packet.ConnectionRequestAccepted: {
 				this.handleConnectionRequestAccepted(frame);
 				break;
-			default:
+			}
+			case Packet.Disconnect: {
+				this.client.close();
+				break;
+			}
+			case 254: {
 				this.client.emit("encapsulated", frame);
 				break;
+			}
+			default: {
+				if (this.client.options.debug)
+					console.debug(`Received unknown packet in processFrame: ${header}`);
+				break;
+			}
 		}
 	}
 

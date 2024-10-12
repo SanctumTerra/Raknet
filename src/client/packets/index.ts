@@ -9,3 +9,4 @@ export * from "./open-connection-second-reply";
 export * from "./open-connection-second-request";
 export * from "./unconnected-ping";
 export * from "./unconnected-pong";
+export * from "./disconnect";

@@ -1,4 +1,4 @@
-import type { Frame, FrameSet } from "@serenityjs/raknet";
+import type { Ack, Frame, FrameSet } from "@serenityjs/raknet";
 import type {
 	OpenConnectionFirstReply,
 	OpenConnectionSecondReply,
@@ -15,6 +15,7 @@ interface ClientEvents {
 	frameset: [FrameSet];
 	encapsulated: [Frame];
 	connect: [];
+	ack: [Ack];
 }
 
 export type { ClientEvents };

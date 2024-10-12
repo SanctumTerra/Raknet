@@ -9,4 +9,5 @@ const client = new Client({
 client.connect().then((advertisement) => {
 	console.log(advertisement);
 	console.log(`Connected to ${client.options.host}:${client.options.port}`);
+	client.disconnect();
 });

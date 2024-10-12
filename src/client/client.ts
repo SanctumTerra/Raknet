@@ -6,7 +6,8 @@ import Emitter from "@serenityjs/emitter";
 import type { ClientEvents } from "./client-events";
 import { Receiver } from "./receiver";
 import type { Advertisement } from "./types/Advertisement";
-import { Status } from "@serenityjs/raknet";
+import { Priority, Status } from "@serenityjs/raknet";
+import { Disconnect } from "./packets";
 
 class Client extends Emitter<ClientEvents> {
 	public options: Options;
@@ -51,6 +52,14 @@ class Client extends Emitter<ClientEvents> {
 		this.emit("close");
 		this.socket.close();
 		clearInterval(this.ticker);
+	}
+
+	public disconnect() {
+		const packet = new Disconnect();
+		this.sender.frameAndSend(packet.serialize(), Priority.Immediate);
+		this.on("ack", () => {
+			this.close();
+		});
 	}
 }
 
