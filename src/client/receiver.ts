@@ -2,20 +2,25 @@ import { BinaryStream } from "@serenityjs/binarystream";
 import {
 	Ack,
 	Bitflags,
+	ConnectedPong,
 	Frame,
 	FrameSet,
 	Nack,
 	Packet,
+	Priority,
+	Reliability,
 } from "@serenityjs/raknet";
 import type { Socket } from "node:dgram";
 import type { Client } from "./client";
 import {
+	ConnectedPing,
 	ConnectionRequestAccepted,
 	OpenConnectionFirstReply,
 	OpenConnectionSecondReply,
 	UnconnectedPong,
 } from "../packets";
 import { Sender } from "./sender";
+import { buffer } from "node:stream/consumers";
 
 class Receiver {
 	private readonly client: Client;
@@ -47,11 +52,6 @@ class Receiver {
 
 	public handle(packet: Buffer): void {
 		const packetType = packet[0];
-		if (packetType !== Packet.UnconnectedPong && this.client.tick <= 0) return;
-		if ((packetType & 0xf0) === Bitflags.Valid) {
-			this.handleValidPacket(packet);
-			return;
-		}
 
 		switch (packetType) {
 			case Packet.UnconnectedPong:
@@ -68,6 +68,10 @@ class Receiver {
 				break;
 			}
 			default:
+				if ((packetType & 0xf0) === Bitflags.Valid) {
+					this.handleValidPacket(packet);
+					return;
+				}
 				if (this.client.options.debug)
 					console.debug(`Received unknown packet: ${packetType}`);
 				break;
@@ -212,6 +216,10 @@ class Receiver {
 				this.client.close();
 				break;
 			}
+			case Packet.ConnectedPing: {
+				this.handleConnectedPing(frame);
+				break;
+			}
 			case 254: {
 				this.client.emit("encapsulated", frame);
 				break;
@@ -222,6 +230,22 @@ class Receiver {
 				break;
 			}
 		}
+	}
+
+	private handleConnectedPing(iframe: Frame): void {
+		const packet = new ConnectedPing(iframe.payload);
+        const deserializedPacket = packet.deserialize();
+
+        const pong = new ConnectedPong();
+        pong.pingTimestamp = deserializedPacket.timestamp;
+        pong.timestamp = BigInt(Date.now());
+
+        const frame = new Frame();
+        frame.reliability = Reliability.Unreliable;
+        frame.orderChannel = 0;
+        frame.payload = pong.serialize();
+
+        this.client.sender.sendFrame(frame, Priority.Immediate);
 	}
 
 	private handleAckSequences(): void {
