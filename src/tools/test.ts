@@ -3,7 +3,7 @@ import { Client } from "../client/client";
 const client = new Client({
 	debug: true,
 	host: "127.0.0.1",
-	port: 19132,
+	port: 19133,
 });
 
 client.connect().then((advertisement) => {

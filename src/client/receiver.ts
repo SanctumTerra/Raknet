@@ -52,6 +52,7 @@ class Receiver {
 
 	public handle(packet: Buffer): void {
 		const packetType = packet[0];
+		if(this.client.options.debug) console.log(`Received packet: ${packetType}`)
 
 		switch (packetType) {
 			case Packet.UnconnectedPong:
@@ -63,18 +64,27 @@ class Receiver {
 			case Packet.OpenConnectionReply2:
 				this.handleOpenConnectionReply2(packet);
 				break;
+			case Bitflags.Valid: {
+				if(this.client.options.debug) console.log(`Received valid packet: ${packetType}`)
+				this.handleValidPacket(packet);
+				return;
+			}
 			case Packet.Ack: {
 				this.client.emit("ack", new Ack(packet).deserialize());
 				break;
 			}
-			default:
-				if ((packetType & 0xf0) === Bitflags.Valid) {
-					this.handleValidPacket(packet);
+			default: {
+				const packetId = packet.readUint8() & 0xf0;
+				
+				if ((packetId & 0xf0) === Bitflags.Valid) {
+					if(this.client.options.debug) console.log(`Received valid packet: ${packetType}`)
+					this.handleFrameSet(packet);
 					return;
 				}
 				if (this.client.options.debug)
 					console.debug(`Received unknown packet: ${packetType}`);
 				break;
+			}
 		}
 	}
 
@@ -286,10 +296,14 @@ class Receiver {
 	}
 
 	private handleValidPacket(packet: Buffer): void {
-		const frameSet = new FrameSet(packet);
-		const deserialized = frameSet.deserialize();
-		this.client.emit("frameset", deserialized);
-		this.handleFrameSet(packet);
+		try {
+			const frameSet = new FrameSet(packet);
+			const deserialized = frameSet.deserialize();
+			this.client.emit("frameset", deserialized);
+			this.handleFrameSet(packet);
+		} catch (error) {
+			console.error(error);
+		}
 	}
 
 	private handleSequenceGap(currentSequence: number): void {
