@@ -216,6 +216,7 @@ class Receiver {
 
 	private processFrame(frame: Frame): void {
 		const header = frame.payload[0] as number;
+		if(this.client.options.debug) console.log(`Processing frame: ${header}`);
 
 		switch (header) {
 			case Packet.ConnectionRequestAccepted: {
@@ -231,6 +232,7 @@ class Receiver {
 				break;
 			}
 			case 254: {
+				if(this.client.options.debug) console.log(`Received encapsulated packet: ${header}`);
 				this.client.emit("encapsulated", frame);
 				break;
 			}
