@@ -7,7 +7,7 @@ import type { ClientEvents } from "./client-events";
 import { Receiver } from "./receiver";
 import type { Advertisement } from "./types/Advertisement";
 import { Priority, Status } from "@serenityjs/raknet";
-import { Disconnect } from "./packets";
+import { Disconnect } from "../packets";
 
 class Client extends Emitter<ClientEvents> {
 	public options: Options;
@@ -22,7 +22,7 @@ class Client extends Emitter<ClientEvents> {
 	constructor(options: Partial<Options> = {}) {
 		super();
 		this.options = { ...defaultOptions, ...options };
-		this.socket = createSocket("udp4");
+		this.socket = options.socket ?? createSocket("udp4");
 		this.receiver = new Receiver(this, this.socket);
 		this.sender = new Sender(this);
 	}
@@ -32,7 +32,7 @@ class Client extends Emitter<ClientEvents> {
 			this.tick++;
 			this.emit("tick");
 		}, 50);
-		this.tick++; 
+		this.tick++;
 		this.status = Status.Connecting;
 		const advertisement = await this.ping();
 		await Sender.connect(this);

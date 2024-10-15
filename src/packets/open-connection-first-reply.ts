@@ -9,7 +9,7 @@ import {
 
 @Proto(Packet.OpenConnectionReply1)
 class OpenConnectionFirstReply extends BasePacket {
-	@Serialize(Magic) public magic!: Buffer;
+	@Serialize(Magic) public magic!: Magic;
 	@Serialize(Long) public guid!: bigint;
 	@Serialize(Bool) public security!: boolean;
 	@Serialize(Short) public mtu!: number;

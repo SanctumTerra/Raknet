@@ -10,7 +10,6 @@ import {
 	Status,
 } from "@serenityjs/raknet";
 import type { Client } from "./client";
-import {} from "./packets/open-connection-first-request";
 import {
 	type OpenConnectionFirstReply,
 	ConnectionRequest,
@@ -18,10 +17,10 @@ import {
 	type OpenConnectionSecondReply,
 	OpenConnectionSecondRequest,
 	UnconnectedPing,
-	OpenFirstConnectionRequest,
+	OpenConnectionFirstRequest,
 	type ConnectionRequestAccepted,
 	NewIncomingConnection,
-} from "./packets";
+} from "../packets";
 import { type Advertisement, fromString } from "./types/Advertisement";
 
 class Sender {
@@ -235,7 +234,7 @@ class Sender {
 
 	static async connect(client: Client): Promise<void> {
 		return new Promise((resolve, reject) => {
-			const packet = new OpenFirstConnectionRequest();
+			const packet = new OpenConnectionFirstRequest();
 			packet.magic = new Magic();
 			packet.mtu = client.options.mtu;
 			packet.protocol = client.options.protocol;

@@ -17,6 +17,8 @@
   "dependencies": {
     "@serenityjs/binarystream": "^2.6.6",
     "@serenityjs/emitter": "^0.5.2",
-    "@serenityjs/raknet": "^0.6.0-beta-20241005152757"
+    "@serenityjs/raknet": "^0.6.0-beta-20241005152757",
+    "socks": "^2.8.3",
+    "socks5-client": "^1.2.8"
   }
 }

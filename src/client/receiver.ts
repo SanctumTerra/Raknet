@@ -14,12 +14,12 @@ import {
 	OpenConnectionFirstReply,
 	OpenConnectionSecondReply,
 	UnconnectedPong,
-} from "./packets";
+} from "../packets";
 import { Sender } from "./sender";
 
 class Receiver {
 	private readonly client: Client;
-	private readonly socket: Socket;
+	private readonly socket!: Socket;
 	private lastInputSequence = -1;
 	private receivedFrameSequences = new Set<number>();
 	private lostFrameSequences = new Set<number>();
@@ -30,9 +30,11 @@ class Receiver {
 
 	constructor(client: Client, socket: Socket) {
 		this.client = client;
+		this.client.on("tick", () => this.tick());
+
 		this.socket = socket;
 		this.socket.on("message", (packet) => this.handle(packet));
-		this.client.on("tick", () => this.tick());
+
 		for (let index = 0; index < 64; index++) {
 			this.inputOrderingQueue.set(index, new Map());
 		}
@@ -46,6 +48,10 @@ class Receiver {
 	public handle(packet: Buffer): void {
 		const packetType = packet[0];
 		if (packetType !== Packet.UnconnectedPong && this.client.tick <= 0) return;
+		if ((packetType & 0xf0) === Bitflags.Valid) {
+			this.handleValidPacket(packet);
+			return;
+		}
 
 		switch (packetType) {
 			case Packet.UnconnectedPong:
@@ -56,9 +62,6 @@ class Receiver {
 				break;
 			case Packet.OpenConnectionReply2:
 				this.handleOpenConnectionReply2(packet);
-				break;
-			case Bitflags.Valid:
-				this.handleValidPacket(packet);
 				break;
 			case Packet.Ack: {
 				this.client.emit("ack", new Ack(packet).deserialize());
@@ -116,12 +119,6 @@ class Receiver {
 	}
 
 	private handleOrdered(frame: Frame): void {
-		if (this.client.options.debug) {
-			console.debug(
-				`Handling ordered frame: orderIndex=${frame.orderIndex}, channel=${frame.orderChannel}`,
-			);
-		}
-
 		const expectedOrderIndex = this.inputOrderIndex[frame.orderChannel];
 		const orderingQueue =
 			this.inputOrderingQueue.get(frame.orderChannel) ||
@@ -130,12 +127,7 @@ class Receiver {
 		if (frame.orderIndex === expectedOrderIndex) {
 			this.processOrderedFrames(frame, orderingQueue);
 		} else if (frame.orderIndex > expectedOrderIndex) {
-			if (this.client.options.debug)
-				console.debug(`Queuing out-of-order frame: ${frame.orderIndex}`);
 			orderingQueue.set(frame.orderIndex, frame);
-		} else {
-			if (this.client.options.debug)
-				console.debug(`Discarding old frame: ${frame.orderIndex}`);
 		}
 	}
 
@@ -150,8 +142,6 @@ class Receiver {
 		while (orderingQueue.has(nextOrderIndex)) {
 			const nextFrame = orderingQueue.get(nextOrderIndex);
 			if (nextFrame) {
-				if (this.client.options.debug)
-					console.debug(`Processing queued frame: ${nextOrderIndex}`);
 				this.processFrame(nextFrame);
 				orderingQueue.delete(nextOrderIndex);
 				this.inputOrderIndex[frame.orderChannel]++;
@@ -163,11 +153,6 @@ class Receiver {
 	private handleSequenced(frame: Frame): void {
 		const currentHighestSequence =
 			this.inputHighestSequenceIndex[frame.orderChannel];
-		if (this.client.options.debug) {
-			console.debug(
-				`Handling sequenced frame: sequenceIndex=${frame.sequenceIndex}, currentHighest=${currentHighestSequence}`,
-			);
-		}
 
 		if (frame.sequenceIndex > currentHighestSequence) {
 			this.inputHighestSequenceIndex[frame.orderChannel] = frame.sequenceIndex;
@@ -179,12 +164,6 @@ class Receiver {
 	}
 
 	private handleFragment(frame: Frame): void {
-		if (this.client.options.debug) {
-			console.debug(
-				`Handling fragment: splitId=${frame.splitId}, splitIndex=${frame.splitIndex}, splitSize=${frame.splitSize}`,
-			);
-		}
-
 		const fragment =
 			this.fragmentsQueue.get(frame.splitId) || new Map<number, Frame>();
 		this.fragmentsQueue.set(frame.splitId, fragment);
@@ -192,10 +171,6 @@ class Receiver {
 		fragment.set(frame.splitIndex, frame);
 
 		if (fragment.size === frame.splitSize) {
-			if (this.client.options.debug)
-				console.debug(
-					`Reassembling complete frame from fragments: splitId=${frame.splitId}`,
-				);
 			this.reassembleAndProcessFragment(frame, fragment);
 		}
 	}

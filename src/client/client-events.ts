@@ -3,7 +3,7 @@ import type {
 	OpenConnectionFirstReply,
 	OpenConnectionSecondReply,
 	UnconnectedPong,
-} from "./packets";
+} from "../packets";
 
 interface ClientEvents {
 	tick: [];

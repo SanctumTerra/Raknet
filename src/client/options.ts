@@ -1,3 +1,5 @@
+import type { Socket } from "node:dgram";
+
 type Options = {
 	protocol: number;
 	host: string;
@@ -7,6 +9,7 @@ type Options = {
 	debug: boolean;
 	/** Timeout in ms default is 5000 aka 5 seconds */
 	timeout: number;
+	socket?: Socket;
 };
 
 const defaultOptions: Options = {
@@ -17,6 +20,7 @@ const defaultOptions: Options = {
 	mtu: 1024,
 	debug: false,
 	timeout: 5000,
+	socket: undefined,
 };
 
 export type { Options };

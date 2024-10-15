@@ -11,7 +11,7 @@ import {
 class UnconnectedPong extends BasePacket {
 	@Serialize(Long) public timestamp!: bigint;
 	@Serialize(Long) public guid!: bigint;
-	@Serialize(Magic) public magic!: Buffer;
+	@Serialize(Magic) public magic!: Magic;
 	@Serialize(String16) public message!: string;
 }
 
