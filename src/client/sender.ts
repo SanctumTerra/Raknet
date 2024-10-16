@@ -11,14 +11,14 @@ import {
 } from "@serenityjs/raknet";
 import type { Client } from "./client";
 import {
-	type OpenConnectionFirstReply,
 	ConnectionRequest,
+	ConnectionRequestAccepted,
 	UnconnectedPong,
 	type OpenConnectionSecondReply,
+	type OpenConnectionFirstReply,
 	OpenConnectionSecondRequest,
 	UnconnectedPing,
 	OpenConnectionFirstRequest,
-	type ConnectionRequestAccepted,
 	NewIncomingConnection,
 } from "../packets";
 import { type Advertisement, fromString } from "./types/Advertisement";
@@ -35,11 +35,11 @@ class Sender {
 	public outputBackup = new Map<number, Frame[]>();
 
 	constructor(private readonly client: Client) {
-		this.outputOrderIndex = Array(32).fill(0);
-		this.outputSequenceIndex = Array(32).fill(0);
 		this.outputFrameQueue = new FrameSet();
-		this.mtu = client.options.mtu;
 		this.outputFrameQueue.frames = [];
+		this.outputOrderIndex = Array.from<number>({ length: 32 }).fill(0);
+		this.outputSequenceIndex = Array.from<number>({ length: 32 }).fill(0);
+		this.mtu = client.options.mtu;
 		this.client.on("tick", () => this.tick());
 	}
 
@@ -47,8 +47,12 @@ class Sender {
 		if (
 			this.client.status === Status.Disconnecting ||
 			this.client.status === Status.Disconnected
-		)
+		) {
+			console.log(
+				"Can not send queue, client is disconnecting or disconnected",
+			);
 			return;
+		}
 		this.sendQueue(this.outputFrames.size);
 	}
 
@@ -153,31 +157,43 @@ class Sender {
 		for (const frame of frameset.frames) this.outputFrames.delete(frame);
 		this.client.send(frameset.serialize());
 	}
-	public newIncommingConnection(
-		payload: Buffer,
-		deserialized: ConnectionRequestAccepted | null = null,
-	) {
-		const packet = new NewIncomingConnection();
-		if (deserialized === null) {
-			packet.internalAddresses = new Array<Address>(10).fill(
-				new Address("0.0.0.0", 0, 4),
-			);
-			packet.serverAddress = new Address("0.0.0.0", 0, 0);
-			packet.incomingTimestamp = BigInt(Date.now());
-			packet.serverTimestamp = 0n;
-		} else {
+
+	public newIncommingConnection(payload: Buffer) {
+		let des: ConnectionRequestAccepted | null = null;
+		let packet: NewIncomingConnection;
+
+		try {
+			const IncomingPacket = new ConnectionRequestAccepted(payload);
+			des = IncomingPacket.deserialize();
+
+			packet = new NewIncomingConnection();
 			packet.internalAddresses = new Array<Address>(10).fill(
 				new Address("0.0.0.0", 0, 4),
 			);
 			packet.serverAddress = new Address(
-				deserialized.address.address,
-				deserialized.address.port,
+				des.address.address,
+				des.address.port,
 				4,
 			);
 			packet.incomingTimestamp = BigInt(Date.now());
-			packet.serverTimestamp = deserialized.timestamp;
+			packet.serverTimestamp = des.timestamp;
+		} catch (error) {
+			const _des = new ConnectionRequestAccepted(payload).deserialize();
+			packet = new NewIncomingConnection();
+			packet.internalAddresses = new Array<Address>(20).fill(
+				new Address("0.0.0.0", 0, 4),
+			);
+			packet.serverAddress = new Address("0.0.0.0", 0, 4);
+			packet.incomingTimestamp = BigInt(Date.now());
+			packet.serverTimestamp = BigInt(0);
 		}
+		if (!packet) {
+			console.error("Failed to deserialize IncomingPacket!");
+			return;
+		}
+		this.client.status = Status.Connected;
 		this.client.sender.frameAndSend(packet.serialize(), Priority.Immediate);
+		void this.client.emit("connect");
 	}
 
 	public connectionRequest() {
@@ -185,24 +201,20 @@ class Sender {
 		packet.client = BigInt(this.client.options.guid);
 		packet.timestamp = BigInt(Date.now());
 		packet.security = false;
-		const frame = new Frame();
-		frame.reliability = Reliability.Reliable;
-		frame.orderChannel = 0;
-		frame.payload = packet.serialize();
-		this.sendFrame(frame, Priority.Immediate);
+		this.frameAndSend(packet.serialize(), Priority.Immediate);
 	}
 
 	static secondRequest(client: Client, reply1: OpenConnectionFirstReply) {
-		const packet = new OpenConnectionSecondRequest();
-		packet.magic = new Magic();
-		packet.address = new Address(
+		const pak = new OpenConnectionSecondRequest();
+		pak.mtu = client.options.mtu;
+		pak.client = client.options.guid;
+		pak.magic = reply1.magic;
+		pak.address = new Address(
 			client.socket.address().address,
 			client.socket.address().port,
 			4,
 		);
-		packet.mtu = client.options.mtu;
-		packet.client = reply1.guid;
-		client.send(packet.serialize());
+		client.send(pak.serialize());
 	}
 
 	static async ping(client: Client): Promise<Advertisement> {
@@ -238,7 +250,6 @@ class Sender {
 			packet.magic = new Magic();
 			packet.mtu = client.options.mtu;
 			packet.protocol = client.options.protocol;
-			client.send(packet.serialize());
 			const timer = setTimeout(() => {
 				reject(
 					new Error(
@@ -256,6 +267,7 @@ class Sender {
 				}
 			};
 			client.socket.on("message", listener);
+			client.send(packet.serialize());
 		});
 	}
 }

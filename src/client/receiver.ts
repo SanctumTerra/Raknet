@@ -1,94 +1,139 @@
-import { BinaryStream } from "@serenityjs/binarystream";
 import {
 	Ack,
+	Address,
 	Bitflags,
-	ConnectedPong,
 	Frame,
 	FrameSet,
 	Nack,
 	Packet,
 	Priority,
 	Reliability,
+	Status,
+	UnconnectedPing,
 } from "@serenityjs/raknet";
-import type { Socket } from "node:dgram";
 import type { Client } from "./client";
+import { BinaryStream } from "@serenityjs/binarystream";
 import {
 	ConnectedPing,
+	ConnectedPong,
+	ConnectionRequest,
 	ConnectionRequestAccepted,
+	NewIncomingConnection,
 	OpenConnectionFirstReply,
 	OpenConnectionSecondReply,
-	UnconnectedPong,
+	OpenConnectionSecondRequest,
 } from "../packets";
 import { Sender } from "./sender";
-import { buffer } from "node:stream/consumers";
+
+const magic = Buffer.from("00ffff00fefefefefdfdfdfd12345678", "hex");
 
 class Receiver {
-	private readonly client: Client;
-	private readonly socket!: Socket;
 	private lastInputSequence = -1;
-	private receivedFrameSequences = new Set<number>();
-	private lostFrameSequences = new Set<number>();
-	private inputHighestSequenceIndex = new Array(64).fill(0);
-	private inputOrderIndex = new Array(64).fill(0);
-	protected inputOrderingQueue = new Map<number, Map<number, Frame>>();
-	protected readonly fragmentsQueue = new Map<number, Map<number, Frame>>();
+	private receivedFrameSequences: Set<number> = new Set();
+	private lostFrameSequences: Set<number> = new Set();
+	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
+	private inputOrderIndex: number[] = new Array(64).fill(0);
 
-	constructor(client: Client, socket: Socket) {
+	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
+	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> =
+		new Map();
+
+	private client: Client;
+
+	constructor(client: Client) {
 		this.client = client;
-		this.client.on("tick", () => this.tick());
-
-		this.socket = socket;
-		this.socket.on("message", (packet) => this.handle(packet));
-
 		for (let index = 0; index < 64; index++) {
 			this.inputOrderingQueue.set(index, new Map());
 		}
+
+		this.client.on("tick", () => {
+			this.tick();
+		});
+		this.client.socket.on("message", (...data) =>
+			this.incomingMessage(data[0]),
+		);
 	}
 
-	private tick(): void {
-		this.handleAckSequences();
-		this.handleNackSequences();
-	}
+	public incomingMessage(buffer: Buffer) {
+		const packetId = buffer.readUint8();
+		const ignore = [132, 192, 128];
+		if (this.client.options.debug)
+			if (!ignore.includes(packetId))
+				console.debug("Received Packet ID ", packetId);
 
-	public handle(packet: Buffer): void {
-		const packetType = packet[0];
-		if(this.client.options.debug) console.log(`Received packet: ${packetType}`)
-
-		switch (packetType) {
-			case Packet.UnconnectedPong:
-				this.handleUnconnectedPong(packet);
+		switch (packetId) {
+			case Bitflags.Valid:
+				this.handleFrameSet(buffer);
 				break;
-			case Packet.OpenConnectionReply1:
-				this.handleOpenConnectionReply1(packet);
-				break;
-			case Packet.OpenConnectionReply2:
-				this.handleOpenConnectionReply2(packet);
-				break;
-			case Bitflags.Valid: {
-				if(this.client.options.debug) console.log(`Received valid packet: ${packetType}`)
-				this.handleValidPacket(packet);
-				return;
-			}
-			case Packet.Ack: {
-				this.client.emit("ack", new Ack(packet).deserialize());
+			case Packet.OpenConnectionReply1: {
+				const reply = new OpenConnectionFirstReply(buffer);
+				const deserialized = reply.deserialize();
+				this.client.emit("open-connection-first-reply", deserialized);
+				Sender.secondRequest(this.client, deserialized);
 				break;
 			}
-			default: {
-				const packetId = packet.readUint8() & 0xf0;
-				
-				if ((packetId & 0xf0) === Bitflags.Valid) {
-					if(this.client.options.debug) console.log(`Received valid packet: ${packetType}`)
-					this.handleFrameSet(packet);
-					return;
-				}
+			case Packet.OpenConnectionReply2: {
+				const reply = new OpenConnectionSecondReply(buffer);
+				const deserialized = reply.deserialize();
+				this.client.emit("open-connection-second-reply", deserialized);
+				this.client.sender.connectionRequest();
+				break;
+			}
+			default:
+				this.otherPackets(buffer);
 				if (this.client.options.debug)
-					console.debug(`Received unknown packet: ${packetType}`);
-				break;
-			}
+					console.debug("Received unknown packet ", packetId);
 		}
 	}
 
-	private handleFrameSet(buffer: Buffer): void {
+	public otherPackets(buffer: Buffer) {
+		const packetId = buffer.readUint8() & 0xf0;
+		switch (packetId) {
+			case Bitflags.Valid:
+				this.handleFrameSet(buffer);
+				break;
+			case Packet.Ack:
+				//this.ack(buffer);
+				break;
+			case Packet.Nack:
+				//console.debug(new Nack(buffer).deserialize());
+				break;
+			default:
+				break;
+		}
+	}
+
+	public sendUnconnectedPing() {
+		const packet = new UnconnectedPing();
+		packet.timestamp = BigInt(Date.now());
+		packet.magic = magic;
+		packet.client = BigInt(this.client.options.guid);
+		this.client.send(packet.serialize());
+	}
+
+	private tick() {
+		if (this.receivedFrameSequences.size > 0) {
+			const ack = new Ack();
+			ack.sequences = [...this.receivedFrameSequences];
+			for (const sequence of this.receivedFrameSequences)
+				this.receivedFrameSequences.delete(sequence);
+			this.send(ack.serialize());
+		}
+
+		if (this.lostFrameSequences.size > 0) {
+			const nack = new Nack();
+			nack.sequences = [...this.lostFrameSequences];
+			for (const sequence of this.lostFrameSequences)
+				this.lostFrameSequences.delete(sequence);
+			this.send(nack.serialize());
+		}
+	}
+
+	public send(buffer: Buffer): void {
+		this.client.send(buffer);
+	}
+
+	handleFrameSet(buffer: Buffer): void {
 		const frameSet = new FrameSet(buffer).deserialize();
 
 		if (this.receivedFrameSequences.has(frameSet.sequence)) {
@@ -96,17 +141,31 @@ class Receiver {
 				console.debug(`Received duplicate frameset ${frameSet.sequence}`);
 			return;
 		}
-
 		this.lostFrameSequences.delete(frameSet.sequence);
 
-		if (frameSet.sequence <= this.lastInputSequence) {
+		if (
+			frameSet.sequence < this.lastInputSequence ||
+			frameSet.sequence === this.lastInputSequence
+		) {
 			if (this.client.options.debug)
 				console.debug(`Received out of order frameset ${frameSet.sequence}!`);
 			return;
 		}
 
 		this.receivedFrameSequences.add(frameSet.sequence);
-		this.handleSequenceGap(frameSet.sequence);
+		const diff = frameSet.sequence - this.lastInputSequence;
+
+		if (diff !== 1) {
+			for (
+				let index = this.lastInputSequence + 1;
+				index < frameSet.sequence;
+				index++
+			) {
+				if (!this.receivedFrameSequences.has(index)) {
+					this.lostFrameSequences.add(index);
+				}
+			}
+		}
 		this.lastInputSequence = frameSet.sequence;
 
 		for (const frame of frameSet.frames) {
@@ -115,12 +174,6 @@ class Receiver {
 	}
 
 	private handleFrame(frame: Frame): void {
-		if (this.client.options.debug) {
-			console.debug(
-				`Handling frame: reliability=${frame.reliability}, orderIndex=${frame.orderIndex}, sequenceIndex=${frame.sequenceIndex}`,
-			);
-		}
-
 		if (frame.isSplit()) {
 			this.handleFragment(frame);
 		} else if (frame.isSequenced()) {
@@ -132,59 +185,37 @@ class Receiver {
 		}
 	}
 
-	private handleOrdered(frame: Frame): void {
-		const expectedOrderIndex = this.inputOrderIndex[frame.orderChannel];
-		const orderingQueue =
-			this.inputOrderingQueue.get(frame.orderChannel) ||
-			new Map<number, Frame>();
+	private processFrame(frame: Frame): void {
+		const header = frame.payload[0] as number;
 
-		if (frame.orderIndex === expectedOrderIndex) {
-			this.processOrderedFrames(frame, orderingQueue);
-		} else if (frame.orderIndex > expectedOrderIndex) {
-			orderingQueue.set(frame.orderIndex, frame);
-		}
-	}
-
-	private processOrderedFrames(
-		frame: Frame,
-		orderingQueue: Map<number, Frame>,
-	): void {
-		this.processFrame(frame);
-		this.inputOrderIndex[frame.orderChannel]++;
-
-		let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
-		while (orderingQueue.has(nextOrderIndex)) {
-			const nextFrame = orderingQueue.get(nextOrderIndex);
-			if (nextFrame) {
-				this.processFrame(nextFrame);
-				orderingQueue.delete(nextOrderIndex);
-				this.inputOrderIndex[frame.orderChannel]++;
-				nextOrderIndex++;
-			}
-		}
-	}
-
-	private handleSequenced(frame: Frame): void {
-		const currentHighestSequence =
-			this.inputHighestSequenceIndex[frame.orderChannel];
-
-		if (frame.sequenceIndex > currentHighestSequence) {
-			this.inputHighestSequenceIndex[frame.orderChannel] = frame.sequenceIndex;
-			this.processFrame(frame);
-		} else {
-			if (this.client.options.debug)
-				console.debug(`Discarding old sequenced frame: ${frame.sequenceIndex}`);
+		switch (header) {
+			case Packet.ConnectionRequestAccepted:
+				this.handleConnectionRequestAccepted(frame);
+				break;
+			case Packet.ConnectedPing:
+				this.handleConnectedPing(frame.payload);
+				break;
+			default:
+				this.client.emit("encapsulated", frame);
+				break;
 		}
 	}
 
 	private handleFragment(frame: Frame): void {
-		const fragment =
-			this.fragmentsQueue.get(frame.splitId) || new Map<number, Frame>();
-		this.fragmentsQueue.set(frame.splitId, fragment);
+		if (!this.fragmentsQueue.has(frame.splitId)) {
+			this.fragmentsQueue.set(frame.splitId, new Map());
+		}
+
+		const fragment = this.fragmentsQueue.get(frame.splitId);
+		if (!fragment) return;
 
 		fragment.set(frame.splitIndex, frame);
 
 		if (fragment.size === frame.splitSize) {
+			if (this.client.options.debug)
+				console.debug(
+					`Reassembling complete frame from fragments: splitId=${frame.splitId}`,
+				);
 			this.reassembleAndProcessFragment(frame, fragment);
 		}
 	}
@@ -206,138 +237,149 @@ class Receiver {
 			}
 		}
 
-		const reassembledFrame = this.createReassembledFrame(
-			frame,
-			stream.getBuffer(),
-		);
+		const reassembledFrame = new Frame();
+		reassembledFrame.reliability = frame.reliability;
+		reassembledFrame.reliableIndex = frame.reliableIndex;
+		reassembledFrame.sequenceIndex = frame.sequenceIndex;
+		reassembledFrame.orderIndex = frame.orderIndex;
+		reassembledFrame.orderChannel = frame.orderChannel;
+		reassembledFrame.payload = stream.getBuffer();
+
 		this.fragmentsQueue.delete(frame.splitId);
 		this.handleFrame(reassembledFrame);
 	}
 
-	private processFrame(frame: Frame): void {
-		const header = frame.payload[0] as number;
-		if(this.client.options.debug) console.log(`Processing frame: ${header}`);
+	private handleSequenced(frame: Frame): void {
+		const currentHighestSequence =
+			this.inputHighestSequenceIndex[frame.orderChannel];
+		if (this.client.options.debug)
+			console.debug(
+				`Handling sequenced frame: sequenceIndex=${frame.sequenceIndex}, currentHighest=${currentHighestSequence}`,
+			);
 
-		switch (header) {
-			case Packet.ConnectionRequestAccepted: {
-				this.handleConnectionRequestAccepted(frame);
-				break;
-			}
-			case Packet.Disconnect: {
-				this.client.close();
-				break;
-			}
-			case Packet.ConnectedPing: {
-				this.handleConnectedPing(frame);
-				break;
-			}
-			case 254: {
-				if(this.client.options.debug) console.log(`Received encapsulated packet: ${header}`);
-				this.client.emit("encapsulated", frame);
-				break;
-			}
-			default: {
+		if (frame.sequenceIndex > currentHighestSequence) {
+			this.inputHighestSequenceIndex[frame.orderChannel] = frame.sequenceIndex;
+			this.processFrame(frame);
+		} else {
+			if (this.client.options.debug)
+				console.debug(`Discarding old sequenced frame: ${frame.sequenceIndex}`);
+		}
+	}
+
+	private handleOrdered(frame: Frame): void {
+		if (this.client.options.debug)
+			console.debug(
+				`Handling ordered frame: orderIndex=${frame.orderIndex}, channel=${frame.orderChannel}`,
+			);
+
+		const expectedOrderIndex = this.inputOrderIndex[frame.orderChannel];
+		const outOfOrderQueue = this.inputOrderingQueue.get(
+			frame.orderChannel,
+		) as Map<number, Frame>;
+
+		if (frame.orderIndex === expectedOrderIndex) {
+			this.processOrderedFrames(frame, outOfOrderQueue);
+		} else if (frame.orderIndex > expectedOrderIndex) {
+			if (this.client.options.debug)
+				console.debug(`Queuing out-of-order frame: ${frame.orderIndex}`);
+			outOfOrderQueue.set(frame.orderIndex, frame);
+		} else {
+			if (this.client.options.debug)
+				console.debug(`Discarding old frame: ${frame.orderIndex}`);
+		}
+	}
+
+	private processOrderedFrames(
+		frame: Frame,
+		outOfOrderQueue: Map<number, Frame>,
+	): void {
+		this.processFrame(frame);
+		this.inputOrderIndex[frame.orderChannel]++;
+
+		let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
+		while (outOfOrderQueue.has(nextOrderIndex)) {
+			const nextFrame = outOfOrderQueue.get(nextOrderIndex);
+			if (nextFrame) {
 				if (this.client.options.debug)
-					console.debug(`Received unknown packet in processFrame: ${header}`);
-				break;
+					console.debug(`Processing queued frame: ${nextOrderIndex}`);
+				this.processFrame(nextFrame);
+				outOfOrderQueue.delete(nextOrderIndex);
+				this.inputOrderIndex[frame.orderChannel]++;
+				nextOrderIndex++;
 			}
 		}
 	}
 
-	private handleConnectedPing(iframe: Frame): void {
-		const packet = new ConnectedPing(iframe.payload);
-        const deserializedPacket = packet.deserialize();
+	private handleConnectedPing(buffer: Buffer): void {
+		const packet = new ConnectedPing(buffer);
+		const deserializedPacket = packet.deserialize();
 
-        const pong = new ConnectedPong();
-        pong.pingTimestamp = deserializedPacket.timestamp;
-        pong.timestamp = BigInt(Date.now());
+		const pong = new ConnectedPong();
+		pong.pingTime = deserializedPacket.timestamp;
+		pong.pongTime = BigInt(Date.now());
 
-        const frame = new Frame();
-        frame.reliability = Reliability.Unreliable;
-        frame.orderChannel = 0;
-        frame.payload = pong.serialize();
+		const frame = new Frame();
+		frame.reliability = Reliability.Unreliable;
+		frame.orderChannel = 0;
+		frame.payload = pong.serialize();
 
-        this.client.sender.sendFrame(frame, Priority.Immediate);
+		this.client.sender.sendFrame(frame, Priority.Immediate);
 	}
 
-	private handleAckSequences(): void {
-		if (this.receivedFrameSequences.size > 0) {
-			const ack = new Ack();
-			ack.sequences = [...this.receivedFrameSequences];
-			this.receivedFrameSequences.clear();
-			this.client.send(ack.serialize());
-		}
-	}
+	handleConnectionRequestAcceptedTwo(frame: Frame) {
+		const des = new ConnectionRequestAccepted(frame.payload).deserialize();
 
-	private handleNackSequences(): void {
-		if (this.lostFrameSequences.size > 0) {
-			const nack = new Nack();
-			nack.sequences = [...this.lostFrameSequences];
-			this.lostFrameSequences.clear();
-			this.client.send(nack.serialize());
-		}
-	}
-
-	private handleUnconnectedPong(packet: Buffer): void {
-		const pong = new UnconnectedPong(packet);
-		this.client.emit("unconnected-pong", pong.deserialize());
-	}
-
-	private handleOpenConnectionReply1(packet: Buffer): void {
-		const reply = new OpenConnectionFirstReply(packet);
-		const deserialized = reply.deserialize();
-		this.client.emit("open-connection-first-reply", deserialized);
-		Sender.secondRequest(this.client, deserialized);
-	}
-
-	private handleOpenConnectionReply2(packet: Buffer): void {
-		const reply = new OpenConnectionSecondReply(packet);
-		const deserialized = reply.deserialize();
-		this.client.emit("open-connection-second-reply", deserialized);
-		this.client.sender.connectionRequest();
-	}
-
-	private handleValidPacket(packet: Buffer): void {
-		try {
-			const frameSet = new FrameSet(packet);
-			const deserialized = frameSet.deserialize();
-			this.client.emit("frameset", deserialized);
-			this.handleFrameSet(packet);
-		} catch (error) {
-			console.error(error);
-		}
-	}
-
-	private handleSequenceGap(currentSequence: number): void {
-		const diff = currentSequence - this.lastInputSequence;
-		if (diff !== 1) {
-			for (
-				let index = this.lastInputSequence + 1;
-				index < currentSequence;
-				index++
-			) {
-				if (!this.receivedFrameSequences.has(index)) {
-					this.lostFrameSequences.add(index);
-				}
-			}
-		}
-	}
-
-	private createReassembledFrame(originalFrame: Frame, payload: Buffer): Frame {
-		const reassembledFrame = new Frame();
-		reassembledFrame.reliability = originalFrame.reliability;
-		reassembledFrame.reliableIndex = originalFrame.reliableIndex;
-		reassembledFrame.sequenceIndex = originalFrame.sequenceIndex;
-		reassembledFrame.orderIndex = originalFrame.orderIndex;
-		reassembledFrame.orderChannel = originalFrame.orderChannel;
-		reassembledFrame.payload = payload;
-		return reassembledFrame;
+		const packet = new NewIncomingConnection();
+		packet.internalAddresses = new Array<Address>(10).fill(
+			new Address("0.0.0.0", 0, 4),
+		);
+		packet.serverAddress = des.address;
+		packet.incomingTimestamp = BigInt(Date.now());
+		packet.serverTimestamp = des.timestamp;
+		return packet;
 	}
 
 	private handleConnectionRequestAccepted(frame: Frame): void {
-		const packet = new ConnectionRequestAccepted(frame.payload);
-		const deserialized = packet.deserialize();
-		this.client.sender.newIncommingConnection(frame.payload, deserialized);
+		let des: ConnectionRequestAccepted;
+		let packet: NewIncomingConnection;
+
+		try {
+			const IncomingPacket = new ConnectionRequestAccepted(frame.payload);
+			des = IncomingPacket.deserialize();
+
+			packet = new NewIncomingConnection();
+			packet.internalAddresses = new Array<Address>(10).fill(
+				new Address("0.0.0.0", 0, 4),
+			);
+			packet.serverAddress = new Address(
+				des.address.address,
+				des.address.port,
+				4,
+			);
+			packet.incomingTimestamp = BigInt(Date.now());
+			packet.serverTimestamp = des.timestamp;
+		} catch (error) {
+			packet = this.handleConnectionRequestAcceptedTwo(frame);
+		}
+
+		if (!packet) {
+			console.error("Failed to deserialize IncomingPacket!");
+			return;
+		}
+
+		const sendFrame = new Frame();
+		sendFrame.reliability = Reliability.ReliableOrdered;
+		sendFrame.orderChannel = 0;
+		sendFrame.payload = packet.serialize();
+
+		if (!sendFrame.payload) {
+			console.error("Failed to serialize the packet!");
+			return;
+		}
+
+		this.client.status = Status.Connected;
+		this.client.sender.sendFrame(sendFrame, Priority.Immediate);
+		void this.client.emit("connect");
 	}
 }
 

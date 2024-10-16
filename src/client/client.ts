@@ -23,7 +23,7 @@ class Client extends Emitter<ClientEvents> {
 		super();
 		this.options = { ...defaultOptions, ...options };
 		this.socket = options.socket ?? createSocket("udp4");
-		this.receiver = new Receiver(this, this.socket);
+		this.receiver = new Receiver(this);
 		this.sender = new Sender(this);
 	}
 
@@ -31,12 +31,11 @@ class Client extends Emitter<ClientEvents> {
 		this.ticker = setInterval(() => {
 			this.tick++;
 			this.emit("tick");
-		}, 50);
+		}, 50).unref();
 		this.tick++;
 		this.status = Status.Connecting;
 		const advertisement = await this.ping();
 		await Sender.connect(this);
-		this.emit("connect");
 		return advertisement;
 	}
 
@@ -51,6 +50,7 @@ class Client extends Emitter<ClientEvents> {
 	public close() {
 		this.emit("close");
 		this.socket.close();
+		// @ts-ignore
 		clearInterval(this.ticker);
 	}
 
