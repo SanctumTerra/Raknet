@@ -1,3 +1,4 @@
+import { MAX_MTU_SIZE } from "@serenityjs/raknet";
 import type { Socket } from "node:dgram";
 
 type Options = {
@@ -17,9 +18,9 @@ const defaultOptions: Options = {
 	host: "0.0.0.0",
 	port: 19132,
 	guid: BigInt(Math.floor(Math.random() * 9007199254740991)),
-	mtu: 1024,
+	mtu: 1492,
 	debug: false,
-	timeout: 5000,
+	timeout: 10000,
 	socket: undefined,
 };
 

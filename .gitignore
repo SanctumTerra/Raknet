@@ -181,3 +181,6 @@ bun-cache
 #Locks
 bun.lockb
 package-lock.json
+
+#test
+test.ts

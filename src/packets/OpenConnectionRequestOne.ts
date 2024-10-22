@@ -9,10 +9,10 @@ import {
 } from "@serenityjs/raknet";
 
 @Proto(Packet.OpenConnectionRequest1)
-class OpenConnectionFirstRequest extends BasePacket {
-	@Serialize(Magic) public magic!: Magic;
+class OpenConnectionRequestOne extends BasePacket {
+	@Serialize(Magic) public magic!: Buffer;
 	@Serialize(Uint8) public protocol!: number;
 	@Serialize(MTU) public mtu!: number;
 }
 
-export { OpenConnectionFirstRequest };
+export { OpenConnectionRequestOne };

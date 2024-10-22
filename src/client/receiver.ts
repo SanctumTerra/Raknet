@@ -19,9 +19,8 @@ import {
 	ConnectionRequest,
 	ConnectionRequestAccepted,
 	NewIncomingConnection,
-	OpenConnectionFirstReply,
-	OpenConnectionSecondReply,
-	OpenConnectionSecondRequest,
+	OpenConnectionReplyOne,
+	OpenConnectionReplyTwo,
 } from "../packets";
 import { Sender } from "./sender";
 
@@ -49,40 +48,45 @@ class Receiver {
 		this.client.on("tick", () => {
 			this.tick();
 		});
-		this.client.socket.on("message", (...data) =>
-			this.incomingMessage(data[0]),
-		);
+		this.client.socket.on("message", (...data) => {
+			this.incomingMessage(data[0]);
+		});
 	}
 
 	public incomingMessage(buffer: Buffer) {
 		const packetId = buffer.readUint8();
 		const ignore = [132, 192, 128];
-		if (this.client.options.debug)
-			if (!ignore.includes(packetId))
-				console.debug("Received Packet ID ", packetId);
+		if (this.client.options.debug && !ignore.includes(packetId)) {
+			console.log(`Received Socket Message: ${packetId}`);
+		}
 
 		switch (packetId) {
 			case Bitflags.Valid:
 				this.handleFrameSet(buffer);
 				break;
 			case Packet.OpenConnectionReply1: {
-				const reply = new OpenConnectionFirstReply(buffer);
+				const reply = new OpenConnectionReplyOne(buffer);
 				const deserialized = reply.deserialize();
-				this.client.emit("open-connection-first-reply", deserialized);
+				if (reply.security) {
+					console.error("Server requires security, which is not supported.");
+					process.exit(1);
+				}
+				this.client.emit("open-connection-reply-one", deserialized);
 				Sender.secondRequest(this.client, deserialized);
 				break;
 			}
 			case Packet.OpenConnectionReply2: {
-				const reply = new OpenConnectionSecondReply(buffer);
+				const reply = new OpenConnectionReplyTwo(buffer);
 				const deserialized = reply.deserialize();
-				this.client.emit("open-connection-second-reply", deserialized);
+				this.client.emit("open-connection-reply-two", deserialized);
 				this.client.sender.connectionRequest();
+				break;
+			}
+			case Packet.UnconnectedPong: {
 				break;
 			}
 			default:
 				this.otherPackets(buffer);
-				if (this.client.options.debug)
-					console.debug("Received unknown packet ", packetId);
 		}
 	}
 
@@ -98,7 +102,12 @@ class Receiver {
 			case Packet.Nack:
 				//console.debug(new Nack(buffer).deserialize());
 				break;
+			case Packet.ConnectionRequestAccepted: {
+				break;
+			}
 			default:
+				if (this.client.options.debug)
+					console.debug(`Received unknown packet ${packetId}`);
 				break;
 		}
 	}
@@ -187,7 +196,6 @@ class Receiver {
 
 	private processFrame(frame: Frame): void {
 		const header = frame.payload[0] as number;
-
 		switch (header) {
 			case Packet.ConnectionRequestAccepted:
 				this.handleConnectionRequestAccepted(frame);
@@ -295,7 +303,6 @@ class Receiver {
 	): void {
 		this.processFrame(frame);
 		this.inputOrderIndex[frame.orderChannel]++;
-
 		let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
 		while (outOfOrderQueue.has(nextOrderIndex)) {
 			const nextFrame = outOfOrderQueue.get(nextOrderIndex);

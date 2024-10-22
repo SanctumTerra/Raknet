@@ -1,7 +1,7 @@
 import type { Ack, Frame, FrameSet } from "@serenityjs/raknet";
 import type {
-	OpenConnectionFirstReply,
-	OpenConnectionSecondReply,
+	OpenConnectionReplyOne,
+	OpenConnectionReplyTwo,
 	UnconnectedPong,
 } from "../packets";
 
@@ -10,8 +10,8 @@ interface ClientEvents {
 	close: [];
 	error: [error: Error];
 	"unconnected-pong": [UnconnectedPong];
-	"open-connection-first-reply": [OpenConnectionFirstReply];
-	"open-connection-second-reply": [OpenConnectionSecondReply];
+	"open-connection-reply-one": [OpenConnectionReplyOne];
+	"open-connection-reply-two": [OpenConnectionReplyTwo];
 	frameset: [FrameSet];
 	encapsulated: [Frame];
 	connect: [];

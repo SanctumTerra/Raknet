@@ -4,6 +4,7 @@ import {
 	Frame,
 	FrameSet,
 	Magic,
+	MIN_MTU_SIZE,
 	Packet,
 	Priority,
 	Reliability,
@@ -14,12 +15,12 @@ import {
 	ConnectionRequest,
 	ConnectionRequestAccepted,
 	UnconnectedPong,
-	type OpenConnectionSecondReply,
-	type OpenConnectionFirstReply,
-	OpenConnectionSecondRequest,
+	type OpenConnectionReplyTwo,
 	UnconnectedPing,
-	OpenConnectionFirstRequest,
 	NewIncomingConnection,
+	OpenConnectionReplyOne,
+	OpenConnectionRequestOne,
+	OpenConnectionRequestTwo,
 } from "../packets";
 import { type Advertisement, fromString } from "./types/Advertisement";
 
@@ -123,7 +124,6 @@ class Sender {
 		nframe.splitIndex = index / maxSize;
 		nframe.splitId = splitId;
 		nframe.splitSize = splitSize;
-
 		if (nframe.isReliable()) {
 			nframe.reliableIndex = this.outputReliableIndex++;
 		}
@@ -161,7 +161,7 @@ class Sender {
 	public newIncommingConnection(payload: Buffer) {
 		let des: ConnectionRequestAccepted | null = null;
 		let packet: NewIncomingConnection;
-
+		console.log("RATATA");
 		try {
 			const IncomingPacket = new ConnectionRequestAccepted(payload);
 			des = IncomingPacket.deserialize();
@@ -187,10 +187,12 @@ class Sender {
 			packet.incomingTimestamp = BigInt(Date.now());
 			packet.serverTimestamp = BigInt(0);
 		}
+
 		if (!packet) {
 			console.error("Failed to deserialize IncomingPacket!");
 			return;
 		}
+		console.log(packet);
 		this.client.status = Status.Connected;
 		this.client.sender.frameAndSend(packet.serialize(), Priority.Immediate);
 		void this.client.emit("connect");
@@ -204,16 +206,12 @@ class Sender {
 		this.frameAndSend(packet.serialize(), Priority.Immediate);
 	}
 
-	static secondRequest(client: Client, reply1: OpenConnectionFirstReply) {
-		const pak = new OpenConnectionSecondRequest();
-		pak.mtu = client.options.mtu;
-		pak.client = client.options.guid;
+	static secondRequest(client: Client, reply1: OpenConnectionReplyOne) {
+		const pak = new OpenConnectionRequestTwo();
 		pak.magic = reply1.magic;
-		pak.address = new Address(
-			client.socket.address().address,
-			client.socket.address().port,
-			4,
-		);
+		pak.address = new Address("0.0.0.0", client.options.port, 4);
+		pak.mtu = reply1.mtu;
+		pak.client = client.options.guid;
 		client.send(pak.serialize());
 	}
 
@@ -245,30 +243,80 @@ class Sender {
 	}
 
 	static async connect(client: Client): Promise<void> {
-		return new Promise((resolve, reject) => {
-			const packet = new OpenConnectionFirstRequest();
-			packet.magic = new Magic();
-			packet.mtu = client.options.mtu;
-			packet.protocol = client.options.protocol;
-			const timer = setTimeout(() => {
-				reject(
-					new Error(
-						`Connection request has timed out after ${client.options.timeout}ms.`,
-					),
-				);
-				client.socket.off("message", listener);
-				clearTimeout(timer);
-			}, client.options.timeout);
-			const listener = (packet: Buffer) => {
-				if (packet[0] === Packet.Ack) {
+		const maxRetries = 5;
+		let retryCount = 0;
+
+		const attemptConnection = (): Promise<void> => {
+			return new Promise((resolve, reject) => {
+				let send = true;
+				let MTU = client.options.mtu - 28;
+				const packet = new OpenConnectionRequestOne();
+				packet.magic = Buffer.from([
+					0, 255, 255, 0, 254, 254, 254, 254, 253, 253, 253, 253, 18, 52, 86,
+					120,
+				]);
+				packet.mtu = MTU;
+				packet.protocol = client.options.protocol;
+				const interval = setInterval(() => {
+					if (MTU <= 1172) MTU = 548;
+					if (MTU > 1400) MTU = 1172;
+					packet.mtu = MTU;
+					client.options.mtu = MTU;
+					if (send) {
+						client.send(packet.serialize());
+					}
+				}, 1500);
+
+				const timer = setTimeout(() => {
 					client.socket.off("message", listener);
 					clearTimeout(timer);
-					resolve();
+					clearInterval(interval);
+					reject(new Error("Connection attempt timed out"));
+				}, client.options.timeout);
+
+				const packet8Timer = setTimeout(() => {
+					client.socket.off("message", listener);
+					clearTimeout(timer);
+					clearInterval(interval);
+					reject(new Error("Packet 8 not received"));
+				}, client.options.timeout / 3);
+
+				const listener = (buffer: Buffer) => {
+					if (buffer[0] === Packet.OpenConnectionReply1) {
+						send = false;
+						const reply1 = new OpenConnectionReplyOne(buffer);
+						const deserializedReply1 = reply1.deserialize();
+						Sender.secondRequest(client, deserializedReply1);
+					} else if (buffer[0] === Packet.Ack) {
+						client.socket.off("message", listener);
+						clearTimeout(timer);
+						clearTimeout(packet8Timer);
+						clearInterval(interval);
+						resolve();
+					}
+				};
+
+				client.socket.on("message", listener);
+				client.send(packet.serialize());
+			});
+		};
+
+		while (retryCount < maxRetries) {
+			try {
+				await attemptConnection();
+				return;
+			} catch (error) {
+				if (client.options.debug)
+					console.log(
+						`Connection attempt ${retryCount + 1} failed: ${(error as Error).message}`,
+					);
+				retryCount++;
+				if (retryCount >= maxRetries) {
+					throw new Error(`Failed to connect after ${maxRetries} attempts`);
 				}
-			};
-			client.socket.on("message", listener);
-			client.send(packet.serialize());
-		});
+				await new Promise((resolve) => setTimeout(resolve, 2000));
+			}
+		}
 	}
 }
 

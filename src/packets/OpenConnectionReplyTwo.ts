@@ -1,5 +1,6 @@
 import { Bool, Long, Short } from "@serenityjs/binarystream";
 import {
+	Address,
 	BasePacket,
 	Magic,
 	Packet,
@@ -7,12 +8,13 @@ import {
 	Serialize,
 } from "@serenityjs/raknet";
 
-@Proto(Packet.OpenConnectionReply1)
-class OpenConnectionFirstReply extends BasePacket {
+@Proto(Packet.OpenConnectionReply2)
+class OpenConnectionReplyTwo extends BasePacket {
 	@Serialize(Magic) public magic!: Magic;
 	@Serialize(Long) public guid!: bigint;
-	@Serialize(Bool) public security!: boolean;
+	@Serialize(Address) public address!: Address;
 	@Serialize(Short) public mtu!: number;
+	@Serialize(Bool) public encryption!: boolean;
 }
 
-export { OpenConnectionFirstReply };
+export { OpenConnectionReplyTwo };
