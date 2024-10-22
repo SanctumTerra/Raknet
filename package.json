@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.1.10",
+  "version": "1.1.11",
   "module": "index.ts",
   "main": "./dist/index.js",
   "type": "commonjs",
