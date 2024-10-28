@@ -22,12 +22,16 @@ class Client extends Emitter<ClientEvents> {
     constructor(options: Partial<ClientOptions> = defaultClientOptions) {
         super();
         this.options = { ...defaultClientOptions, ...options };
+        this.maxListeners = 20;
     }
 
     public initSocket() { 
         try {
             this.socket = createSocket("udp4");
             this.framer = new Framer(this);
+            this.remove("tick", () => this.framer.tick());
+            this.on("tick", () => this.framer.tick());
+            this.socket.removeAllListeners("message");
             this.socket.on("message", this.onMessage.bind(this));
         } catch (error) {
             Logger.error(`Failed to create socket: ${error}`);
@@ -113,7 +117,7 @@ class Client extends Emitter<ClientEvents> {
             switch(packetId) {
                 case Packet.Ack: {
                     const packet = new Ack(msg).deserialize();
-                    // this.emit("ack", packet);
+                    this.emit("ack", packet);
                     break;
                 }
                 case Packet.UnconnectedPong: {
@@ -164,6 +168,7 @@ class Client extends Emitter<ClientEvents> {
             this.waitingForReplyOne = false;
             if(this.options.debug) Logger.debug("Failed to receive OpenConnectionReplyOne");
             this.connect();
+            clearTimeout(timeout);
         }, 500);
         this.once("open-connection-reply-one", () => {
             clearTimeout(timeout);

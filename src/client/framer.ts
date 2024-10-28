@@ -47,7 +47,6 @@ export class Framer {
 			this.inputOrderingQueue.set(index, new Map());
 		}
 
-		this.client.on("tick", () => this.tick());
 	}
 
 	public tick() {
