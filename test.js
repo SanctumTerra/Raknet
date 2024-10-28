@@ -1,1 +1,0 @@
-const { Client } = require("./dist/index.js");
