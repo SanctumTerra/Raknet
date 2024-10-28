@@ -1,0 +1,6 @@
+export enum Flags {
+	Split = 0x10,
+	Valid = 0x80,
+	Ack = 0x40,
+	Nak = 0x20,
+}
