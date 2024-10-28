@@ -4,6 +4,7 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
+    "build": "tsc",
     "format": "npx @biomejs/biome format ./src",
     "lint": "npx @biomejs/biome lint ./src",
     "lint-write": "npx @biomejs/biome lint --write ./src",
