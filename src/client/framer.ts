@@ -88,40 +88,49 @@ export class Framer {
 	}
 
 	public handle(frameSet: Frameset) {
-		if (this.receivedFrameSequences.has(frameSet.sequence)) {
-			if (this.client.options.debug)
+		try {
+			if (this.receivedFrameSequences.has(frameSet.sequence)) {
+				if (this.client.options.debug)
 				Logger.debug(`Received duplicate frameset ${frameSet.sequence}`);
-			return;
-		}
-		this.lostFrameSequences.delete(frameSet.sequence);
+				return;
+			}
+			this.lostFrameSequences.delete(frameSet.sequence);
 
-		if (
-			frameSet.sequence < this.lastInputSequence ||
-			frameSet.sequence === this.lastInputSequence
-		) {
-			if (this.client.options.debug)
-				Logger.debug(`Received out of order frameset ${frameSet.sequence}!`);
-			return;
-		}
-
-		this.receivedFrameSequences.add(frameSet.sequence);
-		const diff = frameSet.sequence - this.lastInputSequence;
-
-		if (diff !== 1) {
-			for (
-				let index = this.lastInputSequence + 1;
-				index < frameSet.sequence;
-				index++
+			if (
+				frameSet.sequence < this.lastInputSequence ||
+				frameSet.sequence === this.lastInputSequence
 			) {
-				if (!this.receivedFrameSequences.has(index)) {
-					this.lostFrameSequences.add(index);
+				if (this.client.options.debug)
+					Logger.debug(`Received out of order frameset ${frameSet.sequence}!`);
+				return;
+			}
+
+			this.receivedFrameSequences.add(frameSet.sequence);
+			const diff = frameSet.sequence - this.lastInputSequence;
+
+			if (diff !== 1) {
+				for (
+					let index = this.lastInputSequence + 1;
+					index < frameSet.sequence;
+					index++
+				) {
+					if (!this.receivedFrameSequences.has(index)) {
+						this.lostFrameSequences.add(index);
+					}
 				}
 			}
-		}
-		this.lastInputSequence = frameSet.sequence;
 
-		for (const frame of frameSet.frames) {
-			this.handleFrame(frame);
+			this.lastInputSequence = frameSet.sequence;
+
+			for (const frame of frameSet.frames) {
+				try {
+					this.handleFrame(frame);
+				} catch (err) {
+					Logger.error("Error handling frame", (err as Error));
+				}
+			}
+		} catch (err) {
+			Logger.error("Error handling frameset", (err as Error));
 		}
 	}
 
@@ -165,8 +174,6 @@ export class Framer {
 		while (outOfOrderQueue.has(nextOrderIndex)) {
 			const nextFrame = outOfOrderQueue.get(nextOrderIndex);
 			if (nextFrame) {
-				if (this.client.options.debug)
-					console.debug(`Processing queued frame: ${nextOrderIndex}`);
 				this.processFrame(nextFrame);
 				outOfOrderQueue.delete(nextOrderIndex);
 				this.inputOrderIndex[frame.orderChannel]++;
@@ -299,11 +306,13 @@ export class Framer {
 		splitSize: number,
 	): Frame {
 		const nframe = new Frame();
-		nframe.reliability = originalFrame.reliability;
+		nframe.reliableFrameIndex = this.outputReliableIndex++;
 		nframe.sequenceFrameIndex = originalFrame.sequenceFrameIndex;
 		nframe.orderedFrameIndex = originalFrame.orderedFrameIndex;
 		nframe.orderChannel = originalFrame.orderChannel;
+		nframe.reliability = originalFrame.reliability;
 		nframe.payload = originalFrame.payload.subarray(index, index + maxSize);
+		nframe.splitFrameIndex = index / maxSize;
 		nframe.splitId = splitId;
 		nframe.splitCount = splitSize;
 		if (nframe.isReliable) {

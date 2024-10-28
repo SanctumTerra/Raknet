@@ -16,12 +16,13 @@ export class Frame extends DataType {
 
 	public static read(stream: BinaryStream): Frame[] {
 		const frames: Frame[] = [];
+
 		while (!stream.cursorAtEnd()) {
 			const frame = new Frame();
 			const flags = stream.readUint8();
 			frame.reliability = (flags & 0xe0) >> 5;
 			const split = (flags & Flags.Split) !== 0;
-			const length = stream.readUint16() / 8;
+			const length = Math.ceil(stream.readUint16() / 8);
 
 			if (frame.isReliable)
 				frame.reliableFrameIndex = stream.readUint24(Endianness.Little);
@@ -33,13 +34,12 @@ export class Frame extends DataType {
 			}
 			if (split) {
 				frame.splitCount = stream.readUint32();
-				frame.splitId = stream.readUint8();
-				frame.splitFrameIndex = stream.readUint24(Endianness.Little);
+				frame.splitId = stream.readUint16();
+				frame.splitFrameIndex = stream.readUint32();
 			}
 			frame.payload = stream.readBuffer(length);
 			frames.push(frame);
 		}
-
 		return frames;
 	}
 

@@ -145,6 +145,7 @@ class Client extends Emitter<ClientEvents> {
                     conReq.clientGuid = this.options.clientId;
                     conReq.timestamp = BigInt(Date.now());
                     conReq.useSecurity = false;
+                    this.options.mtuSize = packet.mtu;
                     this.emit("connection-request", conReq);
                     this.framer.frameAndSend(conReq.serialize(), Priority.Immediate);
                     break;
@@ -157,7 +158,7 @@ class Client extends Emitter<ClientEvents> {
                 }
             }
         } catch (error) {
-            Logger.error(`Failed to handle packet: ${error}`);
+            Logger.error("Failed to handle packet", { error: error as Error });
         }
     }
 
