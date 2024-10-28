@@ -73,6 +73,7 @@ class Client extends Emitter<ClientEvents> {
             this.once("ack", (packet) => {
                 if(advertisement) { 
 					clearInterval(this.timeout);
+                    this.emit("connect");
 					resolve(advertisement);
 				}
             });
