@@ -9,6 +9,7 @@ import {
 	Packet,
 	Priority,
 	Reliability,
+	SystemAddress,
 } from "../proto";
 import { Frameset } from "../proto";
 import { Logger } from "../utils";
@@ -72,12 +73,13 @@ export class Framer {
 					frame.payload,
 				).deserialize();
 				const newI = new NewIncomingConnection();
+				SystemAddress.count = 20;
 				newI.serverAddress = this.client.serverAddress;
-				newI.internalAddresses = packet.systemAddresses;
 				newI.incomingTimestamp = BigInt(Date.now());
 				newI.serverTimestamp = packet.timestamp;
 				this.client.emit("new-incoming-connection", newI);
 				this.frameAndSend(newI.serialize(), Priority.Immediate);
+				SystemAddress.count = 0;
 				break;
 			}
 			case 254: {

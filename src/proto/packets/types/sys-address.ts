@@ -5,27 +5,35 @@ import { DataType } from "./data-type";
 import type { BinaryStream } from "@serenityjs/binarystream";
 
 export class SystemAddress extends DataType {
+	static count = 0;
+
 	public static fromIdentifier(identifier: RemoteInfo): Address {
 		return new Address(identifier.address, identifier.port, 4);
 	}
 
 	public static read(stream: BinaryStream): Array<Address> {
 		const addresses: Array<Address> = [];
-		for (let index = 0; index < 20; index++) {
-			const address = Address.read(stream);
-			addresses.push(address);
+		try {
+			for (let index = 0; index < 10; index++) {
+				const address = Address.read(stream);
+				addresses.push(address);
+			}
+		} catch (error) {
+			console.error('Error reading system addresses:', error);
 		}
 		return addresses;
 	}
 
 	public static write(stream: BinaryStream): void {
 		const addresses: Array<Address> = [
-			{ address: "127.0.0.1", port: 0, version: 4 },
+			new Address("127.0.0.1", 0, 4),
 		];
-		for (let index = 0; index < 20; index++) {
+		const count = SystemAddress.count === 0 ? 10 : SystemAddress.count;
+		
+		for (let index = 0; index < count; index++) {
 			Address.write(
 				stream,
-				addresses[index] || { address: "0.0.0.0", port: 0, version: 4 },
+				addresses[index] || new Address("0.0.0.0", 0, 4),
 			);
 		}
 	}

@@ -87,16 +87,20 @@ export class Address extends DataType {
 			const address = bytes.map((byte) => (byte ^ 0xff).toString()).join(".");
 			const port = stream.readUShort();
 			return new Address(address, port, version);
+		// biome-ignore lint/style/noUselessElse: <explanation>
+		} else if (version === 6) {
+			stream.skip(2);
+			const port = stream.readUShort();
+			stream.skip(4);
+			const addressParts = [];
+			for (let i = 0; i < 8; i++) {
+				const part = stream.readUShort() ^ 0xffff;
+				addressParts.push(part.toString(16).padStart(4, "0"));
+			}
+			const address = addressParts.join(":");
+			stream.skip(4); 
+			return new Address(address, port, version);
 		}
-		const port = stream.readUShort();
-		stream.readUint32();
-		const addressParts = [];
-		for (let i = 0; i < 8; i++) {
-			const part = stream.readUShort() ^ 0xffff;
-			addressParts.push(part.toString(16).padStart(4, "0"));
-		}
-		const address = addressParts.join(":");
-		stream.readUint32();
-		return new Address(address, port, version);
+		return new Address("0.0.0.0", 0, 0);
 	}
 }
