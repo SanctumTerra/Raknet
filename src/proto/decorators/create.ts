@@ -8,8 +8,8 @@ import {
 import type { ValidTypes } from "../types";
 /**
  * Thanks to SerenityJS as an example.
- * @param id 
- * @returns 
+ * @param id
+ * @returns
  */
 export function Create(id: number) {
 	return (target: typeof BasePacket) => {

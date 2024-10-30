@@ -87,7 +87,7 @@ export class Address extends DataType {
 			const address = bytes.map((byte) => (byte ^ 0xff).toString()).join(".");
 			const port = stream.readUShort();
 			return new Address(address, port, version);
-		// biome-ignore lint/style/noUselessElse: <explanation>
+			// biome-ignore lint/style/noUselessElse: <explanation>
 		} else if (version === 6) {
 			stream.skip(2);
 			const port = stream.readUShort();
@@ -98,7 +98,7 @@ export class Address extends DataType {
 				addressParts.push(part.toString(16).padStart(4, "0"));
 			}
 			const address = addressParts.join(":");
-			stream.skip(4); 
+			stream.skip(4);
 			return new Address(address, port, version);
 		}
 		return new Address("0.0.0.0", 0, 0);

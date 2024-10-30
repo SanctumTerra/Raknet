@@ -116,6 +116,6 @@ export enum Packet {
 	Reserved8 = 0x84,
 	Reserved9 = 0x85,
 	UserPacketEnum = 0x86,
-	Nack = 0xa0, 
+	Nack = 0xa0,
 	Ack = 0xc0,
 }

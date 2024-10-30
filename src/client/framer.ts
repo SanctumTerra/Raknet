@@ -26,7 +26,8 @@ export class Framer {
 	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
 	private inputOrderIndex: number[] = new Array(64).fill(0);
 	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
-	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> = new Map();
+	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> =
+		new Map();
 
 	public outputOrderIndex: number[];
 	public outputSequenceIndex: number[];
@@ -47,7 +48,6 @@ export class Framer {
 		for (let index = 0; index < 64; index++) {
 			this.inputOrderingQueue.set(index, new Map());
 		}
-
 	}
 
 	public tick() {
@@ -93,7 +93,7 @@ export class Framer {
 		try {
 			if (this.receivedFrameSequences.has(frameSet.sequence)) {
 				if (this.client.options.debug)
-				Logger.debug(`Received duplicate frameset ${frameSet.sequence}`);
+					Logger.debug(`Received duplicate frameset ${frameSet.sequence}`);
 				return;
 			}
 			this.lostFrameSequences.delete(frameSet.sequence);
@@ -128,11 +128,11 @@ export class Framer {
 				try {
 					this.handleFrame(frame);
 				} catch (err) {
-					Logger.error("Error handling frame", (err as Error));
+					Logger.error("Error handling frame", err as Error);
 				}
 			}
 		} catch (err) {
-			Logger.error("Error handling frameset", (err as Error));
+			Logger.error("Error handling frameset", err as Error);
 		}
 	}
 

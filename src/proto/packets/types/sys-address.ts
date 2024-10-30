@@ -19,22 +19,17 @@ export class SystemAddress extends DataType {
 				addresses.push(address);
 			}
 		} catch (error) {
-			console.error('Error reading system addresses:', error);
+			console.error("Error reading system addresses:", error);
 		}
 		return addresses;
 	}
 
 	public static write(stream: BinaryStream): void {
-		const addresses: Array<Address> = [
-			new Address("127.0.0.1", 0, 4),
-		];
+		const addresses: Array<Address> = [new Address("127.0.0.1", 0, 4)];
 		const count = SystemAddress.count === 0 ? 10 : SystemAddress.count;
-		
+
 		for (let index = 0; index < count; index++) {
-			Address.write(
-				stream,
-				addresses[index] || new Address("0.0.0.0", 0, 4),
-			);
+			Address.write(stream, addresses[index] || new Address("0.0.0.0", 0, 4));
 		}
 	}
 }
