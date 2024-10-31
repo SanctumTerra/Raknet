@@ -99,7 +99,6 @@ export class Client extends Emitter<ClientEvents> {
 					if (isResolved) return;
 
 					if (connectionAttempts >= maxAttempts) {
-						isResolved = true;
 						this.cleanup();
 						reject(new Error("Connection timed out"));
 						return;
@@ -117,7 +116,10 @@ export class Client extends Emitter<ClientEvents> {
 				};
 
 				this.onceAfter("new-incoming-connection", (packet) => {
+					console.log(advertisement, isResolved);
+					console.log(advertisement && !isResolved);
 					if (advertisement && !isResolved) {
+						console.log("emit connect")
 						isResolved = true;
 						this.emit("connect");
 						this.isConnecting = false;
@@ -128,7 +130,6 @@ export class Client extends Emitter<ClientEvents> {
 				this.once("open-connection-reply-one", () => {
 					if (this.options.debug)
 						Logger.debug("Received OpenConnectionReplyOne");
-					isResolved = true;
 				});
 
 				attemptConnection();
