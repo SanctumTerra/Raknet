@@ -9,6 +9,7 @@ export * from "./open-connection-reply-two";
 export * from "./connection-request";
 export * from "./frameset";
 export * from "./ack";
+export * from "./nack";
 export * from "./connected-ping";
 export * from "./connected-pong";
 export * from "./new-incoming-connection";

@@ -10,6 +10,7 @@ import {
 	Priority,
 	Reliability,
 	SystemAddress,
+	Nack,
 } from "../proto";
 import { Frameset } from "../proto";
 import { Logger } from "../utils";
@@ -51,6 +52,23 @@ export class Framer {
 	}
 
 	public tick() {
+		if (this.receivedFrameSequences.size > 0) {
+			const ack = new Ack();
+			ack.sequences = Array.from(this.receivedFrameSequences).map((seq) => {
+				this.receivedFrameSequences.delete(seq);
+				return seq;
+			});
+			this.frameAndSend(ack.serialize(), Priority.Immediate);
+		}
+		if (this.lostFrameSequences.size > 0) {
+			const pk = new Nack();
+			pk.sequences = Array.from(this.lostFrameSequences).map((seq) => {
+				this.lostFrameSequences.delete(seq);
+				return seq;
+			});
+			this.frameAndSend(pk.serialize(), Priority.Immediate);
+		}
+
 		this.sendQueue(this.outputFrames.size);
 	}
 
@@ -59,6 +77,26 @@ export class Framer {
 		if (this.client.options.debug)
 			Logger.debug(`Received FrameSet Packet ${header}`);
 		switch (header) {
+			case Packet.Nack: {
+				const nack = new Nack(frame.payload).deserialize();
+				for (const seq of nack.sequences) {
+					if (this.outputBackup.has(seq)) {
+						const lostFrames = this.outputBackup.get(seq) ?? [];
+						for (const lostFrame of lostFrames) {
+							this.sendFrame(lostFrame, Priority.Immediate);
+						}
+						this.outputBackup.delete(seq);
+					}
+				}
+				break;
+			}
+			case Packet.Ack: {
+				const ack = new Ack(frame.payload).deserialize();
+				for (const seq of ack.sequences) {
+					this.outputBackup.delete(seq);
+				}
+				break;
+			}
 			case Packet.ConnectedPing: {
 				const packet = new ConnectedPing(frame.payload).deserialize();
 				this.client.emit("connected-ping", packet);
