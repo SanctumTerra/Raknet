@@ -4,11 +4,13 @@ import type { ClientEvents } from "./client-events";
 import { RaknetClient as RakSocket } from "@sanctumterra/rs-rak-client";
 import {
 	Ack,
+	Advertisement,
 	ConnectedPing,
 	ConnectedPong,
 	ConnectionRequest,
 	ConnectionRequestAccepted,
 	Frameset,
+	fromString,
 	Nack,
 	NewIncomingConnection,
 	Packet,
@@ -22,7 +24,7 @@ export class Client extends Emitter<ClientEvents> {
 	public options: ClientOptions;
 	public ticker!: NodeJS.Timeout;
 	public tick = 0;
-	private advertisement!: string;
+	private advertisement!: Advertisement;
 
 	constructor(options: Partial<ClientOptions>) {
 		super();
@@ -34,7 +36,7 @@ export class Client extends Emitter<ClientEvents> {
 		);
 	}
 
-	public async connect(): Promise<string> {
+	public async connect(): Promise<Advertisement> {
 		this.rakSocket.connect();
 		this.ticker = setInterval(() => {
 			this.rakSocket.tick();
@@ -49,7 +51,7 @@ export class Client extends Emitter<ClientEvents> {
 		});
 	}
 
-	public async ping(): Promise<string> {
+	public async ping(): Promise<Advertisement> {
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				cleanup();
@@ -57,9 +59,9 @@ export class Client extends Emitter<ClientEvents> {
 			}, 5000);
 
 			const pongHandler = (pong: UnconnectedPong) => {
-				this.advertisement = pong.message;
+				this.advertisement = fromString(pong.message);
 				cleanup();
-				resolve(pong.message);
+				resolve(fromString(pong.message));
 			};
 
 			const cleanup = () => {
