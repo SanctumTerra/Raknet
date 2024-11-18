@@ -88,8 +88,12 @@ export class Client extends Emitter<ClientEvents> {
 
 		let packetId = data[0];
 		if ((packetId & 0xf0) === 0x80) packetId = 0x80;
-
+		console.log(data);
 		switch (packetId) {
+			case 254: {
+				this.emit("encapsulated", data);
+				break;
+			}
 			case Packet.Ack: {
 				const ack = new Ack(data).deserialize();
 				this.emit("ack", ack);
