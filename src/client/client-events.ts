@@ -9,8 +9,11 @@ import type {
 	OpenConnectionRequestTwo,
 	UnconnectedPing,
 	UnconnectedPong,
+	Frameset,
+	Nack,
+	ConnectedPong,
+	ConnectionRequestAccepted,
 } from "../proto";
-import type { Frameset } from "../proto/packets/frameset";
 
 export interface ClientEvents {
 	"open-connection-reply-one": [OpenConnectionReplyOne];
@@ -23,8 +26,11 @@ export interface ClientEvents {
 	"connected-ping": [ConnectedPing];
 	"connection-request": [ConnectionRequest];
 	"new-incoming-connection": [NewIncomingConnection];
+	"connection-request-accepted": [ConnectionRequestAccepted];
+	"connected-pong": [ConnectedPong];
 	encapsulated: [Buffer];
 	ack: [Ack];
+	nack: [Nack];
 	error: [Error];
 	close: [];
 	connect: [];
