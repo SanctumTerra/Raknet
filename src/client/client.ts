@@ -4,7 +4,6 @@ import type { ClientEvents } from "./client-events";
 import { RaknetClient as RakSocket } from "@sanctumterra/rs-rak-client";
 import {
 	Ack,
-	Advertisement,
 	ConnectedPing,
 	ConnectedPong,
 	ConnectionRequest,
@@ -16,6 +15,7 @@ import {
 	Packet,
 	UnconnectedPing,
 	UnconnectedPong,
+	type Advertisement,
 } from "../proto";
 
 export class Client extends Emitter<ClientEvents> {
