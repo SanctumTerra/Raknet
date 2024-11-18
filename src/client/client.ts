@@ -46,6 +46,7 @@ export class Client extends Emitter<ClientEvents> {
 		await this.ping();
 		return new Promise((resolve, reject) => {
 			this.once("ack", () => {
+				this.emit("connect");
 				resolve(this.advertisement);
 			});
 		});
