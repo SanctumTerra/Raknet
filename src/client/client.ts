@@ -33,6 +33,7 @@ export class Client extends Emitter<ClientEvents> {
 			this.options.address,
 			this.options.port,
 			this.options.mtuSize,
+			this.options.debug,
 		);
 	}
 
