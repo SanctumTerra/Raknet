@@ -27,8 +27,10 @@ import type {
 	Uuid,
 } from "@serenityjs/binarystream";
 import type { DataType } from "../packets/types/data-type";
+import type { CompoundTag } from "@serenityjs/nbt";
 
 export type ValidTypes =
+	| typeof CompoundTag // For @serenityjs/protocol
 	| typeof DataType
 	| typeof Bool
 	| typeof Byte
@@ -56,3 +58,4 @@ export type ValidTypes =
 	| typeof VarString
 	| typeof ZigZag
 	| typeof ZigZong;
+	
