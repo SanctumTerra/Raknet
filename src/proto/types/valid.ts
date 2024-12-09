@@ -58,4 +58,3 @@ export type ValidTypes =
 	| typeof VarString
 	| typeof ZigZag
 	| typeof ZigZong;
-	

@@ -32,19 +32,23 @@ export class Client extends Emitter<ClientEvents> {
 		this.rakSocket = new RakSocket(
 			this.options.address,
 			this.options.port,
-			this.options.mtuSize,
-			this.options.debug,
+			// this.options.mtuSize, forgor
+			// this.options.debug,
 		);
 	}
 
 	public async connect(): Promise<Advertisement> {
-		this.rakSocket.connect();
 		this.ticker = setInterval(() => {
+			// this.rakSocket.receive();
 			this.rakSocket.tick();
-			this.handleData(this.rakSocket.receive());
+			const data = this.rakSocket.onEvent();
+			if (data) {
+				this.handleData(Buffer.from(data.data));
+			}
 			this.tick++;
-		}, 50);
+		}, 20);
 		await this.ping();
+		this.rakSocket.connect();
 		return new Promise((resolve, reject) => {
 			this.once("ack", () => {
 				this.emit("connect");
