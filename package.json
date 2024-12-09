@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.3.59",
+  "version": "1.3.60",
   "description": "",
   "main": "dist/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@sanctumterra/rs-rak-client": "^1.0.64",
+    "@sanctumterra/rs-rak-client": "^1.0.65",
     "@serenityjs/binarystream": "^2.6.6",
     "@serenityjs/emitter": "^0.5.2",
     "@serenityjs/nbt": "^0.6.1",
