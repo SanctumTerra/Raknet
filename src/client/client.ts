@@ -39,7 +39,7 @@ export class Client extends Emitter<ClientEvents> {
 
 	public async connect(): Promise<Advertisement> {
 		this.ticker = setInterval(() => {
-			// this.rakSocket.receive();
+			this.rakSocket.receive();
 			this.rakSocket.tick();
 			const data = this.rakSocket.onEvent();
 			if (data) {
