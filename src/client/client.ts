@@ -1,7 +1,10 @@
 import Emitter from "@serenityjs/emitter";
 import { type ClientOptions, defaultClientOptions } from "./client_options";
 import type { ClientEvents } from "./client-events";
-import { RaknetClient as RakSocket } from "@sanctumterra/rs-rak-client";
+import {
+	type JsEvent,
+	RaknetClient as RakSocket,
+} from "@sanctumterra/rs-rak-client";
 import {
 	Ack,
 	ConnectedPing,
@@ -39,14 +42,10 @@ export class Client extends Emitter<ClientEvents> {
 
 	public async connect(): Promise<Advertisement> {
 		this.ticker = setInterval(() => {
-			this.rakSocket.receive();
 			this.rakSocket.tick();
-			const data = this.rakSocket.onEvent();
-			if (data) {
-				this.handleData(Buffer.from(data.data));
-			}
 			this.tick++;
-		}, 20);
+		}, 50);
+		this.receive();
 		await this.ping();
 		this.rakSocket.connect();
 		return new Promise((resolve, reject) => {
@@ -55,6 +54,39 @@ export class Client extends Emitter<ClientEvents> {
 				resolve(this.advertisement);
 			});
 		});
+	}
+
+	async receive() {
+		const MAX_EVENTS_PER_BATCH = 64;
+
+		while (true) {
+			try {
+				this.rakSocket.receive();
+				const events = [];
+				let event: JsEvent | null;
+
+				while (
+					events.length < MAX_EVENTS_PER_BATCH &&
+					// biome-ignore lint/suspicious/noAssignInExpressions: <explantion>
+					(event = this.rakSocket.onEvent())
+				) {
+					if (event?.data) {
+						events.push(Buffer.from(event.data));
+					}
+				}
+
+				if (events.length > 0) {
+					for (const eventData of events) {
+						this.handleData(eventData);
+					}
+				}
+
+				await new Promise(setImmediate);
+			} catch (error) {
+				console.error("Error in receive loop:", error);
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+		}
 	}
 
 	public async ping(): Promise<Advertisement> {
