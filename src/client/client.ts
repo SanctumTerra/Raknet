@@ -21,7 +21,7 @@ import {
 import { type ClientOptions, defaultClientOptions } from "./client-options";
 import { Logger } from "../utils";
 import { Frameset } from "../proto/packets/frameset";
-import { measureExecutionTime, optimizeConnection } from "../utils/decorators";
+import { measureExecutionTime } from "../utils/decorators";
 
 export class Client extends Emitter<ClientEvents> {
 	public socket!: Socket;
@@ -30,19 +30,20 @@ export class Client extends Emitter<ClientEvents> {
 	private timer!: NodeJS.Timeout;
 	private timeout!: NodeJS.Timeout;
 	public serverAddress!: Address;
+
+	private waitingForReplyTwo = false;
+	private waitingForReplyOne = false;
+
 	private isConnecting = false;
+
 	private packetHandlers: Map<number, (msg: Buffer, rinfo: RemoteInfo) => void>;
-	private fastPathPackets = new Set([
-		Packet.Ack,
-		Packet.Nack,
-		Packet.ConnectedPing,
-		Packet.ConnectedPong,
-	]);
+	private packetCache = new Map<number, Buffer>();
 
 	constructor(options: Partial<ClientOptions> = defaultClientOptions) {
 		super();
 		this.options = { ...defaultClientOptions, ...options };
 		this.maxListeners = 20;
+
 		this.packetHandlers = new Map([
 			[Packet.Ack, this.handleAck.bind(this)],
 			[Packet.UnconnectedPong, this.handleUnconnectedPong.bind(this)],
@@ -72,135 +73,134 @@ export class Client extends Emitter<ClientEvents> {
 	}
 
 	public async ping(): Promise<Advertisement | null> {
-		return new Promise((resolve, reject) => {
-			const timeoutId = setTimeout(() => {
-				this.removeAll("unconnected-pong");
-				reject(new Error("Ping timed out"));
-			}, this.options.initialConnectionTimeout);
+		return new Promise((resolve) => {
+			const timeout = setTimeout(() => {
+				throw new Error("Failed to ping, timed out.");
+			}, this.options.timeout);
 
-			const sendPing = () => {
-				const unconnectedPing = new UnconnectedPing();
-				unconnectedPing.guid = this.options.clientId;
-				unconnectedPing.clientTimestamp = BigInt(Date.now());
-				this.send(unconnectedPing.serialize());
-			};
-
-			sendPing();
-			const pingInterval = setInterval(sendPing, 50);
-
-			this.once("unconnected-pong", (packet) => {
-				clearTimeout(timeoutId);
-				clearInterval(pingInterval);
+			this.on("unconnected-pong", (packet) => {
+				clearTimeout(timeout);
 				resolve(fromString(packet.message));
 			});
+
+			const unconnectedPing = new UnconnectedPing();
+			unconnectedPing.guid = this.options.clientId;
+			unconnectedPing.clientTimestamp = BigInt(Date.now());
+			this.send(unconnectedPing.serialize());
 		});
 	}
 
 	@measureExecutionTime
-	@optimizeConnection
 	public async connect(): Promise<Advertisement> {
-		if (this.isConnecting)
+		if (this.isConnecting) {
 			throw new Error("Connection attempt already in progress");
+		}
 
 		try {
 			this.isConnecting = true;
 			this.initSocket();
-			const [advertisement] = await Promise.all([
-				this.ping(),
-				this.setupConnection(),
-			]);
-			if (!advertisement) throw new Error("Failed to get server advertisement");
-			return advertisement;
+			this.timer = setInterval(() => {
+				this.emit("tick");
+			}, 50);
+
+			const request = new OpenConnectionRequestOne();
+			request.mtu = this.options.mtuSize;
+			request.protocol = this.options.protocolVersion;
+
+			let connectionAttempts = 0;
+			const maxAttempts = 3;
+			let isResolved = false;
+
+			const advertisement = await this.ping();
+
+			return new Promise((resolve, reject) => {
+				const attemptConnection = () => {
+					if (isResolved) return;
+
+					if (connectionAttempts >= maxAttempts) {
+						this.cleanup();
+						reject(new Error("Connection timed out"));
+						return;
+					}
+
+					connectionAttempts++;
+					if (this.options.debug)
+						Logger.debug(
+							`Sending OpenConnectionRequestOne attempt ${connectionAttempts}/${maxAttempts}`,
+						);
+					this.emit("open-connection-request-one", request);
+					this.send(request.serialize());
+
+					setTimeout(attemptConnection, 500);
+				};
+
+				this.onceAfter("new-incoming-connection", (packet) => {
+					if (advertisement && !isResolved) {
+						isResolved = true;
+						this.emit("connect");
+						this.isConnecting = false;
+						resolve(advertisement);
+					}
+				});
+
+				this.once("open-connection-reply-one", () => {
+					if (this.options.debug)
+						Logger.debug("Received OpenConnectionReplyOne");
+				});
+
+				attemptConnection();
+			});
 		} catch (error) {
 			this.isConnecting = false;
 			throw error;
 		}
 	}
 
-	private async setupConnection(): Promise<void> {
-		this.timer = setInterval(
-			() => this.emit("tick"),
-			this.options.tickInterval,
-		);
-		const request = new OpenConnectionRequestOne();
-		request.mtu = this.options.mtuSize;
-		request.protocol = this.options.protocolVersion;
-
-		return new Promise((resolve, reject) => {
-			let connectionAttempts = 0;
-			const maxAttempts = 3;
-			let isResolved = false;
-			let timeoutId: NodeJS.Timeout;
-
-			const cleanup = () => {
-				clearTimeout(timeoutId);
-				this.removeAll("open-connection-reply-one");
-				this.removeAll("new-incoming-connection");
-			};
-
-			const attemptConnection = () => {
-				if (isResolved) return;
-				if (connectionAttempts >= maxAttempts) {
-					cleanup();
-					reject(new Error("Connection timed out"));
-					return;
-				}
-
-				connectionAttempts++;
-				this.emit("open-connection-request-one", request);
-				this.send(request.serialize());
-
-				const delay =
-					connectionAttempts === 1
-						? 50
-						: Math.min(75 * 1.5 ** (connectionAttempts - 1), 200);
-				timeoutId = setTimeout(attemptConnection, delay);
-			};
-
-			// biome-ignore lint/suspicious/noAssignInExpressions: <explanation>
-			this.once("open-connection-reply-one", () => (connectionAttempts = 0));
-
-			this.onceAfter("new-incoming-connection", () => {
-				if (!isResolved) {
-					isResolved = true;
-					cleanup();
-					this.emit("connect");
-					this.isConnecting = false;
-					resolve();
-				}
-			});
-
-			attemptConnection();
-		});
-	}
-
 	public sendFrame(frame: Frame, priority: Priority): void {
 		this.framer.sendFrame(frame, priority);
 	}
 
+	@measureExecutionTime
 	public send(buffer: Buffer) {
-		if (this.options.debug) {
+		if (this.options.debug)
 			Logger.debug(
 				`Sending ${buffer[0]}, ${buffer.length} bytes to ${this.options.address}:${this.options.port}`,
 			);
-		}
+
 		this.socket.send(
 			buffer,
 			0,
 			buffer.length,
 			this.options.port,
 			this.options.address,
+			(err) => {
+				if (err && this.options.debug) {
+					Logger.error("Failed to send packet:", err);
+				}
+			},
 		);
 	}
 
+	private waitForReply2() {
+		if (this.waitingForReplyTwo) return;
+		this.waitingForReplyTwo = true;
+		const timeout = setTimeout(() => {
+			this.waitingForReplyTwo = false;
+			if (this.options.debug)
+				Logger.debug("Failed to receive OpenConnectionReplyTwo");
+			console.error("Failed to receive OpenConnectionReplyTwo");
+			this.cleanup();
+		}, 100);
+		this.on("open-connection-reply-two", () => {
+			clearTimeout(timeout);
+			this.waitingForReplyTwo = false;
+		});
+	}
+
+	@measureExecutionTime
 	private onMessage(msg: Buffer, rinfo: RemoteInfo) {
 		try {
 			const packetId = (msg[0] & 0xf0) === 0x80 ? 0x80 : msg[0];
-
-			if (this.fastPathPackets.has(packetId)) {
-				this.packetHandlers.get(packetId)?.(msg, rinfo);
-				return;
-			}
 
 			const handler = this.packetHandlers.get(packetId);
 			if (handler) {
@@ -218,6 +218,16 @@ export class Client extends Emitter<ClientEvents> {
 		}
 	}
 
+	private waitForReply1() {
+		if (this.waitingForReplyOne) return;
+		this.waitingForReplyOne = true;
+
+		this.once("open-connection-reply-one", () => {
+			if (this.options.debug) Logger.debug("Received OpenConnectionReplyOne");
+			this.waitingForReplyOne = false;
+		});
+	}
+
 	private cleanup(): void {
 		this.removeAll();
 		this.socket.removeAllListeners();
@@ -228,11 +238,13 @@ export class Client extends Emitter<ClientEvents> {
 	}
 
 	private handleAck(msg: Buffer, _rinfo: RemoteInfo): void {
-		this.emit("ack", new Ack(msg).deserialize());
+		const packet = new Ack(msg).deserialize();
+		this.emit("ack", packet);
 	}
 
 	private handleUnconnectedPong(msg: Buffer, _rinfo: RemoteInfo): void {
-		this.emit("unconnected-pong", new UnconnectedPong(msg).deserialize());
+		const packet = new UnconnectedPong(msg).deserialize();
+		this.emit("unconnected-pong", packet);
 	}
 
 	private handleOpenConnectionReplyOne(msg: Buffer, rinfo: RemoteInfo): void {
@@ -243,12 +255,11 @@ export class Client extends Emitter<ClientEvents> {
 			rinfo.port,
 			rinfo.family === "IPv4" ? 4 : 6,
 		);
-
 		const request = new OpenConnectionRequestTwo();
 		request.mtu = packet.mtu;
 		request.address = this.serverAddress;
 		request.clientGuid = this.options.clientId;
-
+		this.waitForReply2();
 		this.emit("open-connection-request-two", request);
 		this.send(request.serialize());
 	}
@@ -264,32 +275,31 @@ export class Client extends Emitter<ClientEvents> {
 		conReq.useSecurity = false;
 
 		let connectionAttempts = 0;
-		let lastAttemptTime = 0;
-
-		this.emit("connection-request", conReq);
-		this.framer.frameAndSend(conReq.serialize(), Priority.Immediate);
-		lastAttemptTime = Date.now();
-
+		const maxAttempts = 5;
 		const connectionInterval = setInterval(() => {
-			const now = Date.now();
-			if (now - lastAttemptTime < 100) return;
-
-			if (connectionAttempts >= 3) {
+			if (connectionAttempts >= maxAttempts) {
 				clearInterval(connectionInterval);
 				this.cleanup();
 				this.emit("error", new Error("Connection request timed out"));
 				return;
 			}
 
-			lastAttemptTime = now;
-			connectionAttempts++;
+			if (this.options.debug)
+				Logger.debug(
+					`Sending ConnectionRequest attempt ${connectionAttempts + 1}/${maxAttempts}`,
+				);
 			this.emit("connection-request", conReq);
 			this.framer.frameAndSend(conReq.serialize(), Priority.Immediate);
+			connectionAttempts++;
 		}, 100);
 
-		this.once("new-incoming-connection", () =>
-			clearInterval(connectionInterval),
-		);
+		this.once("new-incoming-connection", () => {
+			if (this.options.debug)
+				Logger.debug(
+					"Received new incoming connection, clearing connection request interval",
+				);
+			clearInterval(connectionInterval);
+		});
 	}
 
 	private handleFrameSet(msg: Buffer, _rinfo: RemoteInfo): void {

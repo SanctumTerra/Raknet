@@ -3,6 +3,7 @@ import {
 	Ack,
 	ConnectedPing,
 	ConnectedPong,
+	Flags,
 	Frame,
 	NewIncomingConnection,
 	Packet,
@@ -15,16 +16,14 @@ import { Frameset } from "../proto";
 import { Logger } from "../utils";
 import type { Client } from "./client";
 import { ConnectionRequestAccepted } from "../proto/packets/connection-request-accepted";
+import { measureExecutionTime } from "../utils/index";
 
-interface FragmentInfo {
-	frame: Frame;
-	timestamp: number;
-}
+const FRAMESET_CACHE = new WeakMap<Frameset, Buffer>();
+const FRAME_SIZE_CACHE = new WeakMap<Frame, number>();
+const MAX_SPLIT_COUNT = 65_536;
+const FRAME_HEADER_SIZE = 36;
 
 export class Framer {
-	private static readonly BUFFER_SIZES = [1024, 2048, 4096, 8192];
-	private bufferPools: Map<number, Buffer[]> = new Map();
-
 	private client: Client;
 
 	private lastInputSequence = -1;
@@ -33,7 +32,7 @@ export class Framer {
 	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
 	private inputOrderIndex: number[] = new Array(64).fill(0);
 	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
-	protected readonly fragmentsQueue: Map<number, Map<number, FragmentInfo>> =
+	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> =
 		new Map();
 
 	public outputOrderIndex: number[];
@@ -55,34 +54,33 @@ export class Framer {
 		for (let index = 0; index < 64; index++) {
 			this.inputOrderingQueue.set(index, new Map());
 		}
-
-		for (const size of Framer.BUFFER_SIZES) {
-			this.bufferPools.set(
-				size,
-				Array.from({ length: 32 }, () => Buffer.allocUnsafe(size)),
-			);
-		}
 	}
 
 	public tick() {
-		if (this.receivedFrameSequences.size > 0) {
-			const ack = new Ack();
-			ack.sequences = Array.from(this.receivedFrameSequences).map((seq) => {
-				this.receivedFrameSequences.delete(seq);
-				return seq;
-			});
-			this.frameAndSend(ack.serialize(), Priority.Immediate);
-		}
-		if (this.lostFrameSequences.size > 0) {
-			const pk = new Nack();
-			pk.sequences = Array.from(this.lostFrameSequences).map((seq) => {
-				this.lostFrameSequences.delete(seq);
-				return seq;
-			});
-			this.frameAndSend(pk.serialize(), Priority.Immediate);
+		if (
+			this.receivedFrameSequences.size > 0 ||
+			this.lostFrameSequences.size > 0
+		) {
+			this.processPendingSequences();
 		}
 
 		this.sendQueue(this.outputFrames.length);
+	}
+
+	private processPendingSequences(): void {
+		if (this.receivedFrameSequences.size > 0) {
+			const ack = new Ack();
+			ack.sequences = Array.from(this.receivedFrameSequences);
+			this.receivedFrameSequences.clear();
+			this.frameAndSend(ack.serialize(), Priority.Immediate);
+		}
+
+		if (this.lostFrameSequences.size > 0) {
+			const nack = new Nack();
+			nack.sequences = Array.from(this.lostFrameSequences);
+			this.lostFrameSequences.clear();
+			this.frameAndSend(nack.serialize(), Priority.Immediate);
+		}
 	}
 
 	private processFrame(frame: Frame): void {
@@ -140,20 +138,6 @@ export class Framer {
 		}
 	}
 
-	private processBatch(frames: Frame[]): void {
-		const batchSize = 16;
-		for (let i = 0; i < frames.length; i += batchSize) {
-			const batch = frames.slice(i, i + batchSize);
-			for (const frame of batch) {
-				this.processFrame(frame);
-			}
-			if (i + batchSize < frames.length) {
-				setImmediate(() => this.processBatch(frames.slice(i + batchSize)));
-				break;
-			}
-		}
-	}
-
 	public handle(frameSet: Frameset) {
 		try {
 			if (this.receivedFrameSequences.has(frameSet.sequence)) {
@@ -189,12 +173,19 @@ export class Framer {
 
 			this.lastInputSequence = frameSet.sequence;
 
-			this.processBatch(frameSet.frames);
+			for (const frame of frameSet.frames) {
+				try {
+					this.handleFrame(frame);
+				} catch (err) {
+					Logger.error("Error handling frame", err as Error);
+				}
+			}
 		} catch (err) {
 			Logger.error("Error handling frameset", err as Error);
 		}
 	}
 
+	@measureExecutionTime
 	private handleFrame(frame: Frame): void {
 		if (frame.isSplit) {
 			this.handleSplit(frame);
@@ -271,10 +262,7 @@ export class Framer {
 			this.fragmentsQueue.set(frame.splitId, fragmentMap);
 		}
 
-		fragmentMap.set(frame.splitFrameIndex, {
-			frame,
-			timestamp: Date.now(),
-		});
+		fragmentMap.set(frame.splitFrameIndex, frame);
 
 		if (fragmentMap.size !== frame.splitCount) return;
 
@@ -283,45 +271,37 @@ export class Framer {
 
 	private reassembleAndProcessFragment(
 		frame: Frame,
-		fragment: Map<number, FragmentInfo>,
+		fragment: Map<number, Frame>,
 	): void {
 		let totalSize = 0;
-		const fragments: Buffer[] = new Array(fragment.size);
+		for (const [_, sframe] of fragment) {
+			totalSize += sframe.payload.length;
+		}
 
-		for (let i = 0; i < fragment.size; i++) {
-			const fragmentInfo = fragment.get(i);
-			if (!fragmentInfo) {
+		const buffer = Buffer.allocUnsafe(totalSize);
+		let offset = 0;
+
+		for (let index = 0; index < fragment.size; index++) {
+			const sframe = fragment.get(index);
+			if (!sframe) {
 				Logger.error(
-					`Missing fragment at index ${i} for splitId=${frame.splitId}`,
+					`Missing fragment at index ${index} for splitId=${frame.splitId}`,
 				);
 				return;
 			}
-			fragments[i] = fragmentInfo.frame.payload;
-			totalSize += fragmentInfo.frame.payload.length;
-		}
-
-		const buffer = this.getOptimalBuffer(totalSize);
-		let offset = 0;
-
-		for (const fragmentBuffer of fragments) {
-			fragmentBuffer.copy(buffer, offset);
-
-			if (this.client.options.enableBufferPooling) {
-				this.releaseBuffer(buffer);
-			}
-
-			offset += fragmentBuffer.length;
+			sframe.payload.copy(buffer, offset);
+			offset += sframe.payload.length;
 		}
 
 		const reassembledFrame = new Frame();
-		Object.assign(reassembledFrame, {
-			reliability: frame.reliability,
-			reliableFrameIndex: frame.reliableFrameIndex,
-			sequenceFrameIndex: frame.sequenceFrameIndex,
-			orderedFrameIndex: frame.orderedFrameIndex,
-			orderChannel: frame.orderChannel,
-			payload: buffer,
-		});
+		reassembledFrame.reliability = frame.reliability;
+
+		reassembledFrame.reliableFrameIndex = frame.reliableFrameIndex;
+		reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
+
+		reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
+		reassembledFrame.orderChannel = frame.orderChannel;
+		reassembledFrame.payload = buffer;
 
 		this.fragmentsQueue.delete(frame.splitId);
 		this.handleFrame(reassembledFrame);
@@ -331,10 +311,11 @@ export class Framer {
 		payload: Buffer,
 		priority: Priority = Priority.Normal,
 	): void {
-		const frame = new Frame();
-		frame.reliability = Reliability.ReliableOrdered;
-		frame.orderChannel = 0;
-		frame.payload = payload;
+		const frame = this.createCachedFrame(
+			Reliability.ReliableOrdered,
+			0,
+			payload,
+		);
 		this.sendFrame(frame, priority);
 	}
 
@@ -361,117 +342,146 @@ export class Framer {
 		}
 	}
 
+	@measureExecutionTime
 	private handleLargePayload(
 		frame: Frame,
 		maxSize: number,
 		splitSize: number,
 	): void {
-		const splitId = this.outputSplitIndex++ % 65_536;
-		for (let index = 0; index < frame.payload.byteLength; index += maxSize) {
-			const nframe = this.createSplitFrame(
-				frame,
-				index,
-				maxSize,
-				splitId,
-				splitSize,
+		const splitId = this.outputSplitIndex++ % MAX_SPLIT_COUNT;
+		const payload = frame.payload;
+		const frames = new Array<Frame>(splitSize);
+
+		const commonProps = {
+			reliability: frame.reliability,
+			sequenceFrameIndex: frame.sequenceFrameIndex,
+			orderedFrameIndex: frame.orderedFrameIndex,
+			orderChannel: frame.orderChannel,
+			splitCount: splitSize,
+			splitId: splitId,
+		};
+
+		for (let i = 0; i < splitSize; i++) {
+			const start = i * maxSize;
+			const end = Math.min(start + maxSize, payload.length);
+
+			frames[i] = this.createSplitFrameOptimized(
+				payload.subarray(start, end),
+				i,
+				commonProps,
 			);
-			this.queueFrame(nframe, Priority.Immediate);
+		}
+
+		for (const splitFrame of frames) {
+			this.queueFrame(splitFrame, Priority.Immediate);
 		}
 	}
 
-	private createSplitFrame(
-		originalFrame: Frame,
-		index: number,
-		maxSize: number,
-		splitId: number,
-		splitSize: number,
+	private createSplitFrameOptimized(
+		payload: Buffer,
+		splitIndex: number,
+		props: {
+			reliability: number;
+			sequenceFrameIndex: number;
+			orderedFrameIndex: number;
+			orderChannel: number;
+			splitCount: number;
+			splitId: number;
+		},
 	): Frame {
-		const nframe = new Frame();
-		nframe.reliableFrameIndex = this.outputReliableIndex++;
-		nframe.sequenceFrameIndex = originalFrame.sequenceFrameIndex;
-		nframe.orderedFrameIndex = originalFrame.orderedFrameIndex;
-		nframe.orderChannel = originalFrame.orderChannel;
-		nframe.reliability = originalFrame.reliability;
-		nframe.payload = originalFrame.payload.subarray(index, index + maxSize);
-		nframe.splitFrameIndex = index / maxSize;
-		nframe.splitId = splitId;
-		nframe.splitCount = splitSize;
-		if (nframe.isReliable) {
-			nframe.reliableFrameIndex = this.outputReliableIndex++;
+		const frame = new Frame();
+		frame.reliability = props.reliability;
+		frame.sequenceFrameIndex = props.sequenceFrameIndex;
+		frame.orderedFrameIndex = props.orderedFrameIndex;
+		frame.orderChannel = props.orderChannel;
+		frame.payload = payload;
+		frame.splitFrameIndex = splitIndex;
+		frame.splitId = props.splitId;
+		frame.splitCount = props.splitCount;
+
+		if (frame.isReliable) {
+			frame.reliableFrameIndex = this.outputReliableIndex++;
 		}
 
-		return nframe;
+		return frame;
 	}
 
+	@measureExecutionTime
 	private queueFrame(frame: Frame, priority: Priority): void {
-		let length = 4;
-		const currentLength = this.outputFrames.length;
+		const frameSize = this.getFrameSize(frame);
+		let totalLength = 4;
 
-		for (let i = 0; i < currentLength; i++) {
-			length += this.outputFrames[i].getByteLength();
+		for (const queuedFrame of this.outputFrames) {
+			totalLength += this.getFrameSize(queuedFrame);
 		}
 
-		if (length + frame.getByteLength() > this.client.options.mtuSize - 36) {
-			this.sendQueue(currentLength);
+		if (
+			totalLength + frameSize >
+			this.client.options.mtuSize - FRAME_HEADER_SIZE
+		) {
+			this.sendQueue(this.outputFrames.length);
 		}
 
 		if (priority === Priority.Immediate) {
 			this.outputFrames.unshift(frame);
+			this.sendQueue(1);
 		} else {
 			this.outputFrames.push(frame);
 		}
-
-		if (priority === Priority.Immediate) {
-			this.sendQueue(1);
-		}
 	}
 
+	private getFrameSize(frame: Frame): number {
+		let size = FRAME_SIZE_CACHE.get(frame);
+		if (size === undefined) {
+			size = frame.getByteLength();
+			FRAME_SIZE_CACHE.set(frame, size);
+		}
+		return size;
+	}
+
+	@measureExecutionTime
 	public sendQueue(amount: number): void {
 		if (this.outputFrames.length === 0) return;
 
+		const framesToSend = this.outputFrames.splice(0, amount);
+		if (framesToSend.length === 0) return;
+
 		const frameset = new Frameset();
 		frameset.sequence = this.outputSequence++;
-
-		const framesToSend = this.outputFrames.splice(0, amount);
 		frameset.frames = framesToSend;
-		this.outputBackup.set(frameset.sequence, framesToSend);
 
-		this.client.send(frameset.serialize());
-	}
-
-	private cleanupStaleFragments(): void {
-		const now = Date.now();
-		for (const [splitId, fragments] of this.fragmentsQueue) {
-			const firstFragment = fragments.values().next().value;
-			if (
-				firstFragment &&
-				now - firstFragment.timestamp > this.client.options.fragmentTimeout
-			) {
-				this.fragmentsQueue.delete(splitId);
-			}
-		}
-	}
-
-	private getOptimalBuffer(size: number): Buffer {
-		const optimalSize = Framer.BUFFER_SIZES.find((s) => s >= size) ?? size;
-		const pool = this.bufferPools.get(optimalSize);
-
-		if (pool?.length) {
-			// biome-ignore lint/style/noNonNullAssertion: <explanation>
-			return pool.pop()!;
+		const reliableFrames = framesToSend.filter((frame) => frame.isReliable);
+		if (reliableFrames.length > 0) {
+			this.outputBackup.set(frameset.sequence, reliableFrames);
 		}
 
-		return Buffer.allocUnsafe(size);
+		const buffer = this.createFramesetBuffer(frameset);
+		this.client.send(buffer);
 	}
 
-	private releaseBuffer(buffer: Buffer): void {
-		const size = buffer.length;
-		if (Framer.BUFFER_SIZES.includes(size)) {
-			// biome-ignore lint/style/noNonNullAssertion: <explanation>
-			const pool = this.bufferPools.get(size)!;
-			if (pool.length < 32) {
-				pool.push(buffer);
-			}
+	private createFramesetBuffer(frameset: Frameset): Buffer {
+		const cached = FRAMESET_CACHE.get(frameset);
+		if (cached) return cached;
+
+		const buffer = frameset.serialize();
+		FRAMESET_CACHE.set(frameset, buffer);
+		return buffer;
+	}
+
+	private createCachedFrame(
+		reliability: number,
+		orderChannel: number,
+		payload: Buffer,
+	): Frame {
+		const frame = new Frame();
+		frame.reliability = reliability;
+		frame.orderChannel = orderChannel;
+		frame.payload = payload;
+
+		if (frame.isReliable) {
+			frame.reliableFrameIndex = this.outputReliableIndex++;
 		}
+
+		return frame;
 	}
 }
