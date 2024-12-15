@@ -13,4 +13,3 @@ export * from "./nack";
 export * from "./connected-ping";
 export * from "./connected-pong";
 export * from "./new-incoming-connection";
-export * from "./connection-request-accepted";

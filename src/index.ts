@@ -1,3 +1,4 @@
 import "reflect-metadata";
-export * from "./client";
 export * from "./proto";
+export * from "./utils";
+export * from "./client";
