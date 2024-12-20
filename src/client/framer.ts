@@ -1,9 +1,7 @@
-import { Z_BEST_COMPRESSION } from "node:zlib";
 import {
 	Ack,
 	ConnectedPing,
 	ConnectedPong,
-	Flags,
 	Frame,
 	NewIncomingConnection,
 	Packet,
