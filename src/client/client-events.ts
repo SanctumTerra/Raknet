@@ -2,6 +2,7 @@ import type {
 	Ack,
 	ConnectedPing,
 	ConnectionRequest,
+	ConnectionRequestAccepted,
 	NewIncomingConnection,
 	OpenConnectionReplyOne,
 	OpenConnectionReplyTwo,
@@ -22,6 +23,7 @@ export interface ClientEvents {
 	frameset: [Frameset];
 	"connected-ping": [ConnectedPing];
 	"connection-request": [ConnectionRequest];
+	"connection-request-accepted": [ConnectionRequestAccepted];
 	"new-incoming-connection": [NewIncomingConnection];
 	encapsulated: [Buffer];
 	ack: [Ack];

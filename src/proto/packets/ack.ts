@@ -12,11 +12,12 @@ export class Ack extends BasePacket {
 	public override serialize(): Buffer {
 		this.writeUint8(Ack.id);
 		const stream = new BinaryStream();
+		this.sequences.sort((a, b) => a - b);
 		const count = this.sequences.length;
 		let records = 0;
 
 		if (count > 0) {
-			let cursor = 0;
+			let cursor = 1;
 			let start = this.sequences[0] as number;
 			let last = this.sequences[0] as number;
 
@@ -36,7 +37,6 @@ export class Ack extends BasePacket {
 						stream.writeUint24(last, Endianness.Little);
 						start = last = current;
 					}
-
 					++records;
 				}
 			}
@@ -50,13 +50,10 @@ export class Ack extends BasePacket {
 				stream.writeUint24(start, Endianness.Little);
 				stream.writeUint24(last, Endianness.Little);
 			}
-
 			++records;
-
-			this.writeUShort(records);
-			this.writeBuffer(stream.getBuffer());
 		}
-
+		this.writeUShort(records);
+		this.writeBuffer(stream.getBuffer());
 		return this.getBuffer();
 	}
 

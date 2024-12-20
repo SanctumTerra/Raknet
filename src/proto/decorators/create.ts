@@ -21,15 +21,11 @@ export function Create(id: number) {
 			endian: Endianness;
 			parameter: unknown;
 		}> = Reflect.getOwnMetadata("properties", target.prototype);
-		const properties = Reflect.getMetadata("properties", target) || [];
 
-		const packetCache = new WeakMap<object, Buffer>();
+		const properties = Object.getOwnPropertyNames(target.prototype);
 
 		if (!properties.includes("serialize")) {
 			target.prototype.serialize = function () {
-				const cached = packetCache.get(this);
-				if (cached) return cached;
-
 				this.clear();
 				if (id < 1) throw new Error("Packet ID cannot be less than 1.");
 				if (id <= 255) this.writeUint8(id);
@@ -49,9 +45,7 @@ export function Create(id: number) {
 						dtype.write(this, data, endian as Endianness);
 					}
 				}
-				const buffer = Buffer.from(this.binary);
-				packetCache.set(this, buffer);
-				return buffer;
+				return Buffer.from(this.binary);
 			};
 		}
 

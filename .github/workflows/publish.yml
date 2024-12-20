@@ -5,7 +5,7 @@ on:
     branches: 
       - v2
       - main
-      - dev
+      - develop
 
 jobs:
   build:
