@@ -135,7 +135,6 @@ export class Framer {
 				const packet = new OpenConnectionReplyTwo(payload).deserialize();
 				this.client.emit("open-connection-reply-two", packet);
 				this.client.options.mtuSize = packet.mtu;
-
 				const conReq = new ConnectionRequest();
 				conReq.clientGuid = this.client.options.clientId;
 				conReq.timestamp = BigInt(Date.now());
@@ -143,32 +142,6 @@ export class Framer {
 
 				this.client.emit("connection-request", conReq);
 				this.client.framer.frameAndSend(conReq.serialize(), Priority.Immediate);
-
-				let connectionAttempts = 1;
-				const maxAttempts = 3;
-
-				const connectionInterval = setInterval(() => {
-					if (connectionAttempts >= maxAttempts) {
-						clearInterval(connectionInterval);
-						this.client.cleanup();
-						this.client.emit(
-							"error",
-							new Error("Connection request timed out"),
-						);
-						return;
-					}
-
-					this.client.framer.frameAndSend(
-						conReq.serialize(),
-						Priority.Immediate,
-					);
-					connectionAttempts++;
-				}, 30);
-
-				this.client.once("new-incoming-connection", () => {
-					clearInterval(connectionInterval);
-				});
-
 				break;
 			}
 			case Packet.FrameSet: {

@@ -81,7 +81,7 @@ export class Client extends Emitter<ClientEvents> {
 		this.status = Status.Connecting;
 		this.initSocket();
 
-		this.timer = setInterval(() => this.emit("tick"), 20);
+		this.timer = setInterval(() => this.emit("tick"), 50);
 
 		try {
 			const advertisement = await this.ping();
@@ -89,36 +89,57 @@ export class Client extends Emitter<ClientEvents> {
 
 			return new Promise((resolve, reject) => {
 				let isResolved = false;
+				let shouldContinueSending = true;
+
+				const cleanup = () => {
+					clearTimeout(connectionTimeout);
+					clearInterval(requestInterval);
+					if (!isResolved) {
+						Logger.error("Could not resolve connection.");
+						this.cleanup();
+					}
+				};
 
 				const connectionTimeout = setTimeout(() => {
-					if (!isResolved) {
-						this.cleanup();
-						reject(new Error("Connection timed out"));
-					}
+					cleanup();
+					reject(new Error("Connection timed out"));
 				}, this.options.timeout);
 
 				const request = new OpenConnectionRequestOne();
 				request.mtu = this.options.mtuSize;
 				request.protocol = this.options.protocolVersion;
 
+				this.on("open-connection-reply-two", (packet) => {
+					const mtu = packet.mtu;
+					if (mtu > 400 && mtu < 1500) {
+						shouldContinueSending = false;
+					} else {
+						cleanup();
+						reject(new Error(`Invalid MTU size: ${mtu}`));
+					}
+				});
+
 				this.emit("open-connection-request-one", request);
 				this.send(request.serialize());
 
 				const requestInterval = setInterval(() => {
-					if (!isResolved) {
+					if (!isResolved && shouldContinueSending) {
 						this.send(request.serialize());
 					}
-				}, 20);
+				}, 50);
 
 				this.onceAfter("new-incoming-connection", () => {
 					if (!isResolved) {
-						clearTimeout(connectionTimeout);
-						clearInterval(requestInterval);
 						isResolved = true;
 						this.emit("connect");
 						this.status = Status.Connected;
 						resolve(advertisement);
 					}
+				});
+
+				this.once("error", (error) => {
+					cleanup();
+					reject(error);
 				});
 			});
 		} catch (error) {
