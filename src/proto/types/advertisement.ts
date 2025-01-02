@@ -37,4 +37,18 @@ function fromString(message: string): Advertisement {
 	};
 }
 
-export { type Advertisement, fromString };
+function AdvertisementToString(advertisement: Advertisement): string {
+	return [
+		advertisement.type,
+		advertisement.message,
+		advertisement.protocol,
+		advertisement.version,
+		advertisement.playerCount,
+		advertisement.maxPlayers,
+		advertisement.serverGUID,
+		advertisement.serverName,
+		advertisement.gamemode,
+	].join(";");
+}
+
+export { type Advertisement, fromString, AdvertisementToString };

@@ -38,6 +38,9 @@ const specialFormatting: { [key: string]: string } = {
 };
 
 const Logger = {
+	disabled: false,
+	debugEnabled: false,
+
 	info(...data: LogData[]): void {
 		this.log("§7<§l§bINFO§7>§r", ...data);
 	},
@@ -51,6 +54,7 @@ const Logger = {
 	},
 
 	debug(...data: LogData[]): void {
+		if (!this.debugEnabled) return;
 		this.log("§7<§l§dDEBUG§7>§r", ...data);
 	},
 
@@ -66,6 +70,7 @@ const Logger = {
 	},
 
 	log(...data: LogData[]): void {
+		if (this.disabled) return;
 		console.log(this.date(), ...this.colorize(...data));
 	},
 
