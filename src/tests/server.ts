@@ -22,7 +22,6 @@ server.on("connect", (connection: Connection) => {
 	});
 });
 
-
 let closingState = false;
 let attempt = 0;
 process.on("SIGINT", () => {

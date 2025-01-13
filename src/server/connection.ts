@@ -153,7 +153,7 @@ class Connection extends Emitter<ConnectionEvents> {
 					);
 				}
 				this.server.emit("connect", this);
-                break;
+				break;
 			}
 			case Packet.ConnectedPing: {
 				const connectedPing = new ConnectedPing(message).deserialize();
@@ -173,6 +173,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			case 254: {
 				// Basically Encapsulated Packets are used by Minecraft to send and receive stuff (packets not drugs).
+				this.server.emit("encapsulated", message, this);
 				this.emit("encapsulated", message);
 				break;
 			}
@@ -210,9 +211,11 @@ class Connection extends Emitter<ConnectionEvents> {
 			case Packet.Nack: {
 				const nack = new Nack(message).deserialize();
 				for (const seq of nack.sequences) {
-					const lostFrames = this.outputBackup.get(seq) ?? [];
-					for (const lostFrame of lostFrames) {
-						this.sendFrame(lostFrame, Priority.Immediate);
+					const lostFrames = this.outputBackup.get(seq);
+					if (lostFrames && lostFrames.length > 0) {
+						for (const lostFrame of lostFrames) {
+							this.sendFrame(lostFrame, Priority.Immediate);
+						}
 					}
 				}
 				break;
@@ -227,30 +230,36 @@ class Connection extends Emitter<ConnectionEvents> {
 	}
 
 	private handleFrameSet(frameset: Frameset) {
-		if (this.receivedFrameSequences.has(frameset.sequence)) {
+		const sequence = frameset.sequence;
+		if (
+			sequence <= this.lastInputSequence ||
+			this.receivedFrameSequences.has(sequence)
+		) {
 			Logger.debug(
-				`Received duplicate FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with frame ${frameset.sequence}`,
+				`Skipping FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} - sequence ${sequence} (duplicate/old)`,
 			);
 			return;
 		}
-		this.lostFrameSequences.delete(frameset.sequence);
-		if (frameset.sequence <= this.lastInputSequence) {
-			Logger.debug(
-				`Received out of order FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with frame ${frameset.sequence}`,
-			);
-			return;
-		}
-		this.receivedFrameSequences.add(frameset.sequence);
 
-		if (frameset.sequence - this.lastInputSequence > 1) {
-			for (let i = this.lastInputSequence + 1; i < frameset.sequence; i++) {
-				this.lostFrameSequences.add(i);
+		const gap = sequence - this.lastInputSequence;
+		if (gap > 1) {
+			const lostSequences = new Array(gap - 1);
+			for (let i = 0; i < gap - 1; i++) {
+				lostSequences[i] = this.lastInputSequence + 1 + i;
+			}
+			for (const seq of lostSequences) {
+				this.lostFrameSequences.add(seq);
 			}
 		}
-		this.lastInputSequence = frameset.sequence;
 
-		for (const frame of frameset.frames) {
-			this.handleFrame(frame);
+		this.lostFrameSequences.delete(sequence);
+		this.receivedFrameSequences.add(sequence);
+		this.lastInputSequence = sequence;
+
+		const frames = frameset.frames;
+		const len = frames.length;
+		for (let i = 0; i < len; i++) {
+			this.handleFrame(frames[i]);
 		}
 	}
 
@@ -267,132 +276,120 @@ class Connection extends Emitter<ConnectionEvents> {
 	}
 
 	private handleSplit(frame: Frame) {
-		if (!this.fragmentsQueue.has(frame.splitId)) {
-			this.fragmentsQueue.set(
-				frame.splitId,
-				new Map([[frame.splitFrameIndex, frame]]),
-			);
-			return;
+		const splitId = frame.splitId;
+		let fragment = this.fragmentsQueue.get(splitId);
+
+		if (!fragment) {
+			fragment = new Map();
+			this.fragmentsQueue.set(splitId, fragment);
 		}
 
-		const fragment = this.fragmentsQueue.get(frame.splitId);
-		if (!fragment) return;
 		fragment.set(frame.splitFrameIndex, frame);
 
 		if (fragment.size === frame.splitCount) {
-			this.reassembleAndProcessFragment(frame, fragment);
-		}
-	}
-
-	private reassembleAndProcessFragment(
-		frame: Frame,
-		fragment: Map<number, Frame>,
-	) {
-		const stream = new BinaryStream();
-		for (let index = 0; index < fragment.size; index++) {
-			const sframe = fragment.get(index);
-			if (sframe) {
-				stream.writeBuffer(sframe.payload);
-			} else {
-				Logger.error(
-					`Missing fragment at index ${index} for splitId=${frame.splitId}`,
-				);
-				return;
+			let totalSize = 0;
+			for (let i = 0; i < frame.splitCount; i++) {
+				const sframe = fragment.get(i);
+				if (!sframe) {
+					Logger.error(`Missing fragment at index ${i} for splitId=${splitId}`);
+					this.fragmentsQueue.delete(splitId);
+					return;
+				}
+				totalSize += sframe.payload.length;
 			}
+
+			const stream = Buffer.allocUnsafe(totalSize);
+			let offset = 0;
+
+			for (let i = 0; i < frame.splitCount; i++) {
+				// biome-ignore lint/style/noNonNullAssertion: <explanation>
+				const sframe = fragment.get(i)!;
+				sframe.payload.copy(stream, offset);
+				offset += sframe.payload.length;
+			}
+
+			const reassembledFrame = new Frame();
+			reassembledFrame.reliability = frame.reliability;
+			reassembledFrame.reliableFrameIndex = frame.reliableFrameIndex;
+			reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
+			reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
+			reassembledFrame.orderChannel = frame.orderChannel;
+			reassembledFrame.payload = stream;
+
+			this.fragmentsQueue.delete(splitId);
+			this.handleFrame(reassembledFrame);
 		}
-		const reassembledFrame = new Frame();
-		reassembledFrame.reliability = frame.reliability;
-		reassembledFrame.reliableFrameIndex = frame.reliableFrameIndex;
-		reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
-		reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
-		reassembledFrame.orderChannel = frame.orderChannel;
-		reassembledFrame.payload = stream.getBuffer();
-		this.fragmentsQueue.delete(frame.splitId);
-		this.handleFrame(reassembledFrame);
 	}
 
 	private handleOrdered(frame: Frame): void {
-		const expectedOrderIndex = this.inputOrderIndex[frame.orderChannel];
+		const channel = frame.orderChannel;
+		const expectedIndex = this.inputOrderIndex[channel];
+		const frameIndex = frame.orderedFrameIndex;
 
-		if (frame.orderedFrameIndex === expectedOrderIndex) {
-			this.processOrderedFrames(frame);
-		} else if (frame.orderedFrameIndex > expectedOrderIndex) {
-			Logger.debug(`Queuing out-of-order frame: ${frame.orderedFrameIndex}`);
-			const unorderedQueue = this.inputOrderingQueue.get(
-				frame.orderChannel,
-			) as Map<number, Frame>;
-			if (!unorderedQueue) return;
-			unorderedQueue.set(frame.orderedFrameIndex, frame);
-		} else {
-			Logger.debug(`Discarding old frame: ${frame.orderedFrameIndex}`);
-		}
-	}
+		if (frameIndex === expectedIndex) {
+			this.handlePackets(frame.payload);
+			this.inputOrderIndex[channel] = frameIndex + 1;
+			this.inputHighestSequenceIndex[channel] = 0;
 
-	private processOrderedFrames(frame: Frame): void {
-		this.inputOrderIndex[frame.orderChannel] = frame.orderedFrameIndex + 1;
-		this.inputHighestSequenceIndex[frame.orderChannel] = 0;
-		this.handlePackets(frame.payload);
+			const queue = this.inputOrderingQueue.get(channel);
+			if (!queue) return;
 
-		const outOfOrderQueue = this.inputOrderingQueue.get(
-			frame.orderChannel,
-		) as Map<number, Frame>;
-		let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
-
-		for (; outOfOrderQueue.has(nextOrderIndex); nextOrderIndex++) {
-			const nextFrame = outOfOrderQueue.get(nextOrderIndex);
-			if (nextFrame) {
+			let nextIndex = frameIndex + 1;
+			while (queue.has(nextIndex)) {
+				// biome-ignore lint/style/noNonNullAssertion: <explanation>
+				const nextFrame = queue.get(nextIndex)!;
 				this.handlePackets(nextFrame.payload);
-				outOfOrderQueue.delete(nextOrderIndex);
+				queue.delete(nextIndex);
+				nextIndex++;
+			}
+
+			this.inputOrderIndex[channel] = nextIndex;
+		} else if (frameIndex > expectedIndex) {
+			const queue = this.inputOrderingQueue.get(channel);
+			if (queue) {
+				queue.set(frameIndex, frame);
 			}
 		}
-
-		this.inputOrderingQueue.set(frame.orderChannel, outOfOrderQueue);
-		this.inputOrderIndex[frame.orderChannel] = nextOrderIndex;
 	}
 
 	private handleSequenced(frame: Frame): void {
-		const currentHighestSequence =
-			this.inputHighestSequenceIndex[frame.orderChannel];
-		Logger.debug(
-			`Handling sequenced frame: sequenceFrameIndex=${frame.sequenceFrameIndex}, currentHighest=${currentHighestSequence}`,
-		);
+		const channel = frame.orderChannel;
+		const newSequence = frame.sequenceFrameIndex;
+		const currentHighest = this.inputHighestSequenceIndex[channel];
 
 		if (
-			frame.sequenceFrameIndex < currentHighestSequence ||
-			frame.orderedFrameIndex === this.inputOrderIndex[frame.orderChannel]
+			newSequence >= currentHighest &&
+			frame.orderedFrameIndex >= this.inputOrderIndex[channel]
 		) {
-			Logger.debug(
-				`Discarding old sequenced frame: ${frame.sequenceFrameIndex}`,
-			);
-			return;
+			this.inputHighestSequenceIndex[channel] = newSequence + 1;
+			this.handlePackets(frame.payload);
 		}
-
-		this.inputHighestSequenceIndex[frame.orderChannel] =
-			frame.sequenceFrameIndex + 1;
-		this.handlePackets(frame.payload);
 	}
 
 	public sendFrame(frame: Frame, priority: Priority): void {
+		const channel = frame.orderChannel;
+
 		if (frame.isSequenced) {
-			frame.orderedFrameIndex = this.outputOrderIndex[frame.orderChannel];
-			frame.sequenceFrameIndex = (this.outputSequenceIndex[
-				frame.orderChannel
-			] as number)++;
+			frame.orderedFrameIndex = this.outputOrderIndex[channel];
+			frame.sequenceFrameIndex = this.outputSequenceIndex[channel]++;
 		} else if (frame.isOrdered) {
-			frame.orderedFrameIndex = (this.outputOrderIndex[
-				frame.orderChannel
-			] as number)++;
-			this.outputSequenceIndex[frame.orderChannel] = 0;
+			frame.orderedFrameIndex = this.outputOrderIndex[channel]++;
+			this.outputSequenceIndex[channel] = 0;
 		}
+
+		const payloadSize = frame.payload.byteLength;
 		const maxSize = this.mtu - 36;
-		const splitSize = Math.ceil(frame.payload.byteLength / maxSize);
-		if (frame.payload.byteLength > maxSize) {
+
+		if (payloadSize > maxSize) {
+			const splitSize = Math.ceil(payloadSize / maxSize);
 			this.handleLargePayload(frame, maxSize, splitSize);
-		} else {
-			if (frame.isReliable)
-				frame.reliableFrameIndex = this.outputReliableIndex++;
-			this.queueFrame(frame, priority);
+			return;
 		}
+
+		if (frame.isReliable) {
+			frame.reliableFrameIndex = this.outputReliableIndex++;
+		}
+		this.queueFrame(frame, priority);
 	}
 
 	private handleLargePayload(
@@ -493,14 +490,20 @@ class Connection extends Emitter<ConnectionEvents> {
 		}
 	}
 
-    public getConnectionTime(type: "ms" | "s" | "min" = "ms"): number {
-        const time = this.server.connectionTimes.get(`${this.remoteInfo.address}:${this.remoteInfo.port}`) ?? 0;
-        if(type === "ms") return time;
-        if(type === "s") return time / 1000;
-        if(type === "min") return time / 60000;
-        return time;
-    }
+	public getConnectionTime(type: "ms" | "s" | "min" = "ms"): number {
+		const time =
+			this.server.connectionTimes.get(
+				`${this.remoteInfo.address}:${this.remoteInfo.port}`,
+			) ?? 0;
+		if (type === "ms") return time;
+		if (type === "s") return time / 1000;
+		if (type === "min") return time / 60000;
+		return time;
+	}
 
+	public getAddress(): Address {
+		return Address.fromIdentifier(this.remoteInfo);
+	}
 }
 
 export { Connection };

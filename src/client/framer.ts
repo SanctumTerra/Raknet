@@ -23,6 +23,7 @@ import type { Client } from "./client";
 import { BinaryStream } from "@serenityjs/binarystream";
 import { ConnectionRequestAccepted } from "../proto/packets/connection-request-accepted";
 import type { RemoteInfo } from "node:dgram";
+import DisconnectionNotification from "../proto/packets/disconnect";
 
 export class Framer {
 	private client: Client;
@@ -44,6 +45,7 @@ export class Framer {
 	protected outputReliableIndex = 0;
 	protected outputFrames = new Set<Frame>();
 	public outputBackup = new Map<number, Frame[]>();
+	public _tickCount = 0;
 
 	constructor(client: Client) {
 		this.client = client;
@@ -58,6 +60,7 @@ export class Framer {
 	}
 
 	public tick() {
+		this._tickCount++;
 		if (
 			this.client.status === Status.Disconnected ||
 			this.client.status === Status.Disconnecting
@@ -78,6 +81,12 @@ export class Framer {
 				return seq;
 			});
 			this.client.send(pk.serialize());
+		}
+
+		if (this._tickCount % 10 === 0) {
+			const ping = new ConnectedPing();
+			ping.timestamp = BigInt(Date.now());
+			this.frameAndSend(ping.serialize(), Priority.Normal);
 		}
 
 		this.sendQueue(this.outputFrames.size);
@@ -150,6 +159,9 @@ export class Framer {
 				this.client.framer.handle(frameset);
 				break;
 			}
+			default: {
+				Logger.error(`Unknown packet header: ${header}`);
+			}
 		}
 	}
 
@@ -179,6 +191,13 @@ export class Framer {
 					SystemAddress.count = 0;
 					break;
 				}
+				case Packet.DisconnectionNotification: {
+					const packet = new DisconnectionNotification(
+						frame.payload,
+					).deserialize();
+					this.client.cleanup();
+					break;
+				}
 			}
 		}
 
@@ -195,6 +214,13 @@ export class Framer {
 				}
 				case 0xfe: {
 					this.client.emit("encapsulated", frame.payload);
+					break;
+				}
+				case Packet.DisconnectionNotification: {
+					const packet = new DisconnectionNotification(
+						frame.payload,
+					).deserialize();
+					this.client.cleanup();
 					break;
 				}
 			}

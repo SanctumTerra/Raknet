@@ -3,8 +3,7 @@ import { Client } from "../client";
 
 const clients: Client[] = [];
 
-
-if(process.argv[2] === "server") {
+if (process.argv[2] === "server") {
 	setInterval(() => {
 		const client = new Client({
 			address: "127.0.0.1",

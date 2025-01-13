@@ -12,14 +12,15 @@ type ServerOptions = {
 	mtu: number;
 	connectionTimeout: number;
 	blockTime: number;
-    /**
-     * How many ticks per second the server runs
-     */
-    tickRate: number;
-    /**
-     * How many packets per second the server can handle from a specific address (does not include the port)
-     */
-    maxPacketsPerSecond: number;
+	/**
+	 * How many ticks per second the server runs
+	 */
+	tickRate: number;
+	/**
+	 * How many packets per second the server can handle from a specific address (does not include the port)
+	 */
+	maxPacketsPerSecond: number;
+	loggerDisabled: boolean;
 };
 
 const defaultOptions: ServerOptions = {
@@ -33,9 +34,10 @@ const defaultOptions: ServerOptions = {
 	maxConnections: 60,
 	mtu: 1492,
 	connectionTimeout: 12000, // 12 seconds
-    tickRate: 20,
-    blockTime: 30000, // 30 seconds
-    maxPacketsPerSecond: 500,
+	tickRate: 20,
+	blockTime: 30000, // 30 seconds
+	maxPacketsPerSecond: 500,
+	loggerDisabled: false,
 };
 
 export { type ServerOptions, defaultOptions };

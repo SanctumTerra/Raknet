@@ -27,7 +27,6 @@ export function Create(id: number) {
 		if (!properties.includes("serialize")) {
 			target.prototype.serialize = function () {
 				this.clear();
-				if (id < 1) throw new Error("Packet ID cannot be less than 1.");
 				if (id <= 255) this.writeUint8(id);
 				else if (id <= 65535) this.writeUint16(id);
 				else if (id <= 4294967295) this.writeUint32(id);

@@ -50,6 +50,8 @@ export class Client extends Emitter<ClientEvents> {
 			this.socket.on("message", (payload, rinfo) => {
 				this.framer.incommingMessage(payload, rinfo);
 			});
+		Logger.disabled = this.options.loggerDisabled;
+
 		} catch (error) {
 			Logger.error(`Failed to create socket: ${error}`);
 		}

@@ -26,10 +26,10 @@ class Server extends Emitter<ServerEvents> {
 	private socket: Socket;
 	private connections: Map<string, Connection> = new Map();
 	private timer!: NodeJS.Timeout;
-    private tickCount = 0;
+	private tickCount = 0;
 
-    private blockedConnections: Map<string, number> = new Map();
-    private packetsPerSecond: Map<string, number> = new Map();
+	private blockedConnections: Map<string, number> = new Map();
+	private packetsPerSecond: Map<string, number> = new Map();
 
 	private readonly validFlagsMask = Flags.Valid;
 
@@ -37,6 +37,7 @@ class Server extends Emitter<ServerEvents> {
 		super();
 		this.options = { ...defaultOptions, ...options };
 		this.socket = createSocket("udp4");
+		Logger.disabled = this.options.loggerDisabled;
 	}
 
 	public async start() {
@@ -50,23 +51,23 @@ class Server extends Emitter<ServerEvents> {
 	}
 
 	public tick() {
-        this.tickCount++;
+		this.tickCount++;
 		for (const connection of this.connections.values()) {
 			connection.tick();
 		}
 
-        const currentTime = Date.now();
-        
-        // Check every 1s
-        if(this.tickCount % this.options.tickRate === 0) {
-            for(const [addr, blockTime] of this.blockedConnections) {
-                if(blockTime < currentTime) {
-                    Logger.warn(`Unblocking ${addr} for excessive packets`);
-                    this.blockedConnections.delete(addr);
-                }
-            }
-            this.packetsPerSecond.clear();
-        }
+		const currentTime = Date.now();
+
+		// Check every 1s
+		if (this.tickCount % this.options.tickRate === 0) {
+			for (const [addr, blockTime] of this.blockedConnections) {
+				if (blockTime < currentTime) {
+					Logger.warn(`Unblocking ${addr} for excessive packets`);
+					this.blockedConnections.delete(addr);
+				}
+			}
+			this.packetsPerSecond.clear();
+		}
 
 		this.timer = setTimeout(() => this.tick(), 1000 / this.options.tickRate);
 	}
@@ -77,19 +78,21 @@ class Server extends Emitter<ServerEvents> {
 
 	public async handle(message: Buffer, remote: RemoteInfo) {
 		let packetId = message[0];
-        if((packetId & 0xf0) === 0x80) packetId = 0x80;
+		if ((packetId & 0xf0) === 0x80) packetId = 0x80;
 		const remoteAddr = remote.address;
-		if(this.blockedConnections.has(remoteAddr)) {
+		if (this.blockedConnections.has(remoteAddr)) {
 			return;
 		}
 
 		const currentPackets = (this.packetsPerSecond.get(remoteAddr) ?? 0) + 1;
 		this.packetsPerSecond.set(remoteAddr, currentPackets);
-		
-		if(currentPackets > this.options.maxPacketsPerSecond) {
+
+		if (currentPackets > this.options.maxPacketsPerSecond) {
 			const blockUntil = Date.now() + this.options.blockTime;
 			this.blockedConnections.set(remoteAddr, blockUntil);
-			Logger.warn(`Blocking ${remoteAddr} for ${this.options.blockTime}ms for excessive packets`);
+			Logger.warn(
+				`Blocking ${remoteAddr} for ${this.options.blockTime}ms for excessive packets`,
+			);
 			return;
 		}
 
@@ -131,12 +134,12 @@ class Server extends Emitter<ServerEvents> {
 				break;
 			}
 			case Packet.OpenConnectionRequestOne: {
-                if(!this.connectionTimes.has(`${remote.address}:${remote.port}`)) {
-                    this.connectionTimes.set(
-                        `${remote.address}:${remote.port}`,
-                        Date.now(),
-                    );
-                }
+				if (!this.connectionTimes.has(`${remote.address}:${remote.port}`)) {
+					this.connectionTimes.set(
+						`${remote.address}:${remote.port}`,
+						Date.now(),
+					);
+				}
 
 				const request = new OpenConnectionRequestOne(message).deserialize();
 				Logger.debug(
@@ -196,10 +199,13 @@ class Server extends Emitter<ServerEvents> {
 	}
 
 	public deleteConnection(address: string) {
+		const connection = this.connections.get(address);
+		if (connection) {
+			this.emit("closeConnection", connection);
+		}
 		this.connections.delete(address);
 		this.connectionTimes.delete(address);
 	}
-
 
 	public close() {
 		clearTimeout(this.timer);
