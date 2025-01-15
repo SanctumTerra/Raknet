@@ -1,5 +1,6 @@
 import type {
 	Ack,
+	Advertisement,
 	ConnectedPing,
 	ConnectionRequest,
 	ConnectionRequestAccepted,
@@ -29,6 +30,6 @@ export interface ClientEvents {
 	ack: [Ack];
 	error: [Error];
 	close: [];
-	connect: [];
+	connect: [Advertisement];
 	tick: [];
 }

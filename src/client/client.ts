@@ -133,7 +133,7 @@ export class Client extends Emitter<ClientEvents> {
 				this.onceAfter("new-incoming-connection", () => {
 					if (!isResolved) {
 						isResolved = true;
-						this.emit("connect");
+						this.emit("connect", advertisement);
 						this.status = Status.Connected;
 						resolve(advertisement);
 					}
