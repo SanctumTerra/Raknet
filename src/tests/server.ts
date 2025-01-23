@@ -15,7 +15,7 @@ server.start();
 
 server.on("connect", (connection: Connection) => {
 	Logger.info(
-		`Connection from ${connection.remoteInfo.address}:${connection.remoteInfo.port} established in ${connection.getConnectionTime()}ms`,
+		`Connection from ${connection.remoteInfo.address}:${connection.remoteInfo.port} established in unknown ms`,
 	);
 	connection.on("encapsulated", (packet: Buffer) => {
 		Logger.info(`Received Encapsulated packet: ${packet.toString("hex")}`);

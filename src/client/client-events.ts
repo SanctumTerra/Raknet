@@ -2,6 +2,7 @@ import type {
 	Ack,
 	Advertisement,
 	ConnectedPing,
+	ConnectedPong,
 	ConnectionRequest,
 	ConnectionRequestAccepted,
 	NewIncomingConnection,
@@ -23,6 +24,7 @@ export interface ClientEvents {
 	"unconnected-pong": [UnconnectedPong];
 	frameset: [Frameset];
 	"connected-ping": [ConnectedPing];
+	"connected-pong": [ConnectedPong];
 	"connection-request": [ConnectionRequest];
 	"connection-request-accepted": [ConnectionRequestAccepted];
 	"new-incoming-connection": [NewIncomingConnection];

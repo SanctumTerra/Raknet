@@ -27,13 +27,15 @@ import DisconnectionNotification from "../proto/packets/disconnect";
 
 export class Framer {
 	private client: Client;
-
 	private lastInputSequence = -1;
 	private receivedFrameSequences: Set<number> = new Set();
 	private lostFrameSequences: Set<number> = new Set();
 	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
 	private inputOrderIndex: number[] = new Array(64).fill(0);
-	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
+	protected inputOrderingQueue: Array<Map<number, Frame>> = Array.from(
+		{ length: 64 },
+		() => new Map(),
+	);
 	protected readonly fragmentsQueue: Map<number, Map<number, Frame>> =
 		new Map();
 
@@ -43,9 +45,12 @@ export class Framer {
 	protected outputSequence = 0;
 	protected outputSplitIndex = 0;
 	protected outputReliableIndex = 0;
-	protected outputFrames = new Set<Frame>();
+	public outputFrames: Frame[] = [];
+	private outputFramesByteLength = 0;
 	public outputBackup = new Map<number, Frame[]>();
 	public _tickCount = 0;
+	private lastPingSent = 0;
+	private lastPongReceived = 0;
 
 	constructor(client: Client) {
 		this.client = client;
@@ -53,10 +58,7 @@ export class Framer {
 		this.outputFrameQueue.frames = [];
 		this.outputOrderIndex = Array.from<number>({ length: 32 }).fill(0);
 		this.outputSequenceIndex = Array.from<number>({ length: 32 }).fill(0);
-
-		for (let index = 0; index < 64; index++) {
-			this.inputOrderingQueue.set(index, new Map());
-		}
+		this.lastPongReceived = Date.now();
 	}
 
 	public tick() {
@@ -64,45 +66,73 @@ export class Framer {
 		if (
 			this.client.status === Status.Disconnected ||
 			this.client.status === Status.Disconnecting
-		)
+		) {
+			Logger.debug(
+				`[Framer] Skipping tick - client status: ${Status[this.client.status]}`,
+			);
 			return;
-		if (this.receivedFrameSequences.size > 0) {
+		}
+
+		const now = Date.now();
+
+		if (
+			now - this.lastPongReceived > 30000 &&
+			this.client.status === Status.Connected
+		) {
+			Logger.warn(
+				"[Framer] No pong received in last 30 seconds, disconnecting",
+			);
+			this.client.cleanup();
+			return;
+		}
+
+		if (this._tickCount % 50 === 0) {
+			this.lastPingSent = now;
+			const ping = new ConnectedPing();
+			ping.timestamp = BigInt(now);
+			this.frameAndSend(ping.serialize(), Priority.Immediate);
+			Logger.debug(
+				`[Framer] Sent ping at ${now}, last pong received: ${this.lastPongReceived}`,
+			);
+		}
+
+		const ackSeqs = this.receivedFrameSequences;
+		if (ackSeqs.size > 0) {
+			this.receivedFrameSequences = new Set();
+			Logger.debug(`[Framer] Sending ACK for ${ackSeqs.size} sequences`);
 			const ack = new Ack();
-			ack.sequences = Array.from(this.receivedFrameSequences).map((seq) => {
-				this.receivedFrameSequences.delete(seq);
-				return seq;
-			});
+			ack.sequences = Array.from(ackSeqs);
 			this.client.send(ack.serialize());
 		}
-		if (this.lostFrameSequences.size > 0) {
+
+		const nackSeqs = this.lostFrameSequences;
+		if (nackSeqs.size > 0) {
+			this.lostFrameSequences = new Set();
+			Logger.debug(`[Framer] Sending NACK for ${nackSeqs.size} sequences`);
 			const pk = new Nack();
-			pk.sequences = Array.from(this.lostFrameSequences).map((seq) => {
-				this.lostFrameSequences.delete(seq);
-				return seq;
-			});
+			pk.sequences = Array.from(nackSeqs);
 			this.client.send(pk.serialize());
 		}
 
-		if (this._tickCount % 10 === 0) {
-			const ping = new ConnectedPing();
-			ping.timestamp = BigInt(Date.now());
-			this.frameAndSend(ping.serialize(), Priority.Normal);
-		}
-
-		this.sendQueue(this.outputFrames.size);
+		Logger.debug(
+			`[Framer] Queue state - Frames: ${this.outputFrames.length}, Backup: ${this.outputBackup.size}`,
+		);
+		this.sendQueue(this.outputFrames.length);
 	}
 
 	public incommingMessage(payload: Buffer, rinfo: RemoteInfo) {
 		let header = payload.readUint8();
 		if ((header & 0xf0) === 0x80) header = 0x80;
-		if (this.client.options.debug)
-			Logger.debug(
-				`Received packet ${header} from ${rinfo.address}:${rinfo.port}`,
-			);
+		Logger.debug(
+			`[Framer] Received packet ${header} from ${rinfo.address}:${rinfo.port}`,
+		);
 
 		switch (header) {
 			case Packet.Ack: {
 				const ack = new Ack(payload).deserialize();
+				Logger.debug(
+					`[Framer] Processing ACK with ${ack.sequences.length} sequences`,
+				);
 				for (const seq of ack.sequences) {
 					this.outputBackup.delete(seq);
 				}
@@ -110,12 +140,17 @@ export class Framer {
 			}
 			case Packet.Nack: {
 				const nack = new Nack(payload).deserialize();
+				Logger.debug(
+					`[Framer] Processing NACK with ${nack.sequences.length} sequences`,
+				);
 				for (const seq of nack.sequences) {
 					const lostFrames = this.outputBackup.get(seq) ?? [];
+					Logger.debug(
+						`[Framer] Resending ${lostFrames.length} lost frames for sequence ${seq}`,
+					);
 					for (const lostFrame of lostFrames) {
 						this.sendFrame(lostFrame, Priority.Immediate);
 					}
-					// this.outputBackup.delete(seq);
 				}
 				break;
 			}
@@ -167,8 +202,7 @@ export class Framer {
 
 	private processFrame(frame: Frame): void {
 		const header = frame.payload[0] as number;
-		if (this.client.options.debug)
-			Logger.debug(`Received FrameSet Packet ${header}`);
+		Logger.debug(`[Framer] Processing frame with header ${header}`);
 
 		if (this.client.status === Status.Connecting) {
 			switch (header) {
@@ -192,9 +226,9 @@ export class Framer {
 					break;
 				}
 				case Packet.DisconnectionNotification: {
-					const packet = new DisconnectionNotification(
-						frame.payload,
-					).deserialize();
+					Logger.info(
+						"[Framer] Received disconnection notification while connecting",
+					);
 					this.client.cleanup();
 					break;
 				}
@@ -212,14 +246,23 @@ export class Framer {
 					this.frameAndSend(pong.serialize(), Priority.Immediate);
 					break;
 				}
+				case Packet.ConnectedPong: {
+					const packet = new ConnectedPong(frame.payload).deserialize();
+					this.lastPongReceived = Date.now();
+					Logger.debug(
+						`[Framer] Received pong, latency: ${
+							Date.now() - Number(packet.pingTime)
+						}ms`,
+					);
+					this.client.emit("connected-pong", packet);
+					break;
+				}
 				case 0xfe: {
 					this.client.emit("encapsulated", frame.payload);
 					break;
 				}
 				case Packet.DisconnectionNotification: {
-					const packet = new DisconnectionNotification(
-						frame.payload,
-					).deserialize();
+					Logger.info("[Framer] Received disconnection notification");
 					this.client.cleanup();
 					break;
 				}
@@ -230,8 +273,9 @@ export class Framer {
 	public handle(frameSet: Frameset) {
 		try {
 			if (this.receivedFrameSequences.has(frameSet.sequence)) {
-				if (this.client.options.debug)
-					Logger.debug(`Received duplicate frameset ${frameSet.sequence}`);
+				Logger.debug(
+					`[Framer] Received duplicate frameset ${frameSet.sequence}`,
+				);
 				return;
 			}
 			this.lostFrameSequences.delete(frameSet.sequence);
@@ -240,8 +284,9 @@ export class Framer {
 				frameSet.sequence < this.lastInputSequence ||
 				frameSet.sequence === this.lastInputSequence
 			) {
-				if (this.client.options.debug)
-					Logger.debug(`Received out of order frameset ${frameSet.sequence}!`);
+				Logger.debug(
+					`[Framer] Received out of order frameset ${frameSet.sequence}!`,
+				);
 				return;
 			}
 
@@ -249,6 +294,11 @@ export class Framer {
 			const diff = frameSet.sequence - this.lastInputSequence;
 
 			if (diff > 1) {
+				Logger.debug(
+					`[Framer] Detected ${diff - 1} missing sequences between ${
+						this.lastInputSequence
+					} and ${frameSet.sequence}`,
+				);
 				for (
 					let index = this.lastInputSequence + 1;
 					index < frameSet.sequence;
@@ -264,15 +314,21 @@ export class Framer {
 				try {
 					this.handleFrame(frame);
 				} catch (err) {
-					Logger.error("Error handling frame", err as Error);
+					Logger.error("[Framer] Error handling frame", err as Error);
 				}
 			}
 		} catch (err) {
-			Logger.error("Error handling frameset", err as Error);
+			Logger.error("[Framer] Error handling frameset", err as Error);
 		}
 	}
 
 	private handleFrame(frame: Frame): void {
+		if (this.client.options.debug) {
+			Logger.debug(
+				`[Framer] Handling frame - Split: ${frame.isSplit}, Sequenced: ${frame.isSequenced}, Ordered: ${frame.isOrdered}`,
+			);
+		}
+
 		if (frame.isSplit) {
 			this.handleSplit(frame);
 		} else if (frame.isSequenced) {
@@ -292,9 +348,7 @@ export class Framer {
 		} else if (frame.orderedFrameIndex > expectedOrderIndex) {
 			if (this.client.options.debug)
 				Logger.debug(`Queuing out-of-order frame: ${frame.orderedFrameIndex}`);
-			const unorderedQueue = this.inputOrderingQueue.get(
-				frame.orderChannel,
-			) as Map<number, Frame>;
+			const unorderedQueue = this.inputOrderingQueue[frame.orderChannel];
 			if (!unorderedQueue) return;
 			unorderedQueue.set(frame.orderedFrameIndex, frame);
 		} else {
@@ -308,9 +362,7 @@ export class Framer {
 		this.inputHighestSequenceIndex[frame.orderChannel] = 0;
 		this.processFrame(frame);
 
-		const outOfOrderQueue = this.inputOrderingQueue.get(
-			frame.orderChannel,
-		) as Map<number, Frame>;
+		const outOfOrderQueue = this.inputOrderingQueue[frame.orderChannel];
 		let nextOrderIndex = this.inputOrderIndex[frame.orderChannel];
 
 		for (; outOfOrderQueue.has(nextOrderIndex); nextOrderIndex++) {
@@ -321,7 +373,6 @@ export class Framer {
 			}
 		}
 
-		this.inputOrderingQueue.set(frame.orderChannel, outOfOrderQueue);
 		this.inputOrderIndex[frame.orderChannel] = nextOrderIndex;
 	}
 
@@ -423,29 +474,21 @@ export class Framer {
 		const maxSize = this.client.options.mtuSize - 36;
 		const splitSize = Math.ceil(frame.payload.byteLength / maxSize);
 		if (frame.payload.byteLength > maxSize) {
-			this.handleLargePayload(frame, maxSize, splitSize);
+			const splitId = this.outputSplitIndex++ & 0xffff;
+			for (let index = 0; index < frame.payload.byteLength; index += maxSize) {
+				const nframe = this.createSplitFrame(
+					frame,
+					index,
+					maxSize,
+					splitId,
+					splitSize,
+				);
+				this.queueFrame(nframe, Priority.Immediate);
+			}
 		} else {
 			if (frame.isReliable)
 				frame.reliableFrameIndex = this.outputReliableIndex++;
 			this.queueFrame(frame, priority);
-		}
-	}
-
-	private handleLargePayload(
-		frame: Frame,
-		maxSize: number,
-		splitSize: number,
-	): void {
-		const splitId = this.outputSplitIndex++ % 65_536;
-		for (let index = 0; index < frame.payload.byteLength; index += maxSize) {
-			const nframe = this.createSplitFrame(
-				frame,
-				index,
-				maxSize,
-				splitId,
-				splitSize,
-			);
-			this.queueFrame(nframe, Priority.Immediate);
 		}
 	}
 
@@ -474,16 +517,15 @@ export class Framer {
 	}
 
 	private queueFrame(frame: Frame, priority: Priority): void {
-		let length = 4;
-		for (const queuedFrame of this.outputFrames) {
-			length += queuedFrame.getByteLength();
+		const frameLength = frame.getByteLength();
+		const totalLength = 4 + this.outputFramesByteLength + frameLength;
+
+		if (totalLength > this.client.options.mtuSize - 36) {
+			this.sendQueue(this.outputFrames.length);
 		}
 
-		if (length + frame.getByteLength() > this.client.options.mtuSize - 36) {
-			this.sendQueue(this.outputFrames.size);
-		}
-
-		this.outputFrames.add(frame);
+		this.outputFrames.push(frame);
+		this.outputFramesByteLength += frameLength;
 
 		if (priority === Priority.Immediate) {
 			this.sendQueue(1);
@@ -491,12 +533,30 @@ export class Framer {
 	}
 
 	public sendQueue(amount: number): void {
-		if (this.outputFrames.size === 0) return;
+		if (this.outputFrames.length === 0) return;
+
+		Logger.debug(
+			`[Framer] Sending queue with ${amount} frames, total queued: ${this.outputFrames.length}`,
+		);
+
 		const frameset = new Frameset();
 		frameset.sequence = this.outputSequence++;
-		frameset.frames = [...this.outputFrames].slice(0, amount);
-		this.outputBackup.set(frameset.sequence, frameset.frames);
-		for (const frame of frameset.frames) this.outputFrames.delete(frame);
+		const framesToSend = this.outputFrames.slice(0, amount);
+		frameset.frames = framesToSend;
+
+		this.outputFrames = this.outputFrames.slice(amount);
+		const sentLength = framesToSend.reduce(
+			(sum, f) => sum + f.getByteLength(),
+			0,
+		);
+		this.outputFramesByteLength -= sentLength;
+
+		this.outputBackup.set(frameset.sequence, framesToSend);
+
+		Logger.debug(
+			`[Framer] Frameset sequence: ${frameset.sequence}, remaining in queue: ${this.outputFrames.length}`,
+		);
+
 		this.client.send(frameset.serialize());
 	}
 }

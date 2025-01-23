@@ -1,4 +1,4 @@
-type LogData = string | number | boolean | null | undefined | object;
+type LogData = string | number | boolean | null | undefined | object | unknown;
 
 const colors: { [key: string]: string } = {
 	"0": "\u001B[30m",

@@ -7,7 +7,7 @@ import {
 	type Address,
 	type Advertisement,
 	ConnectionRequest,
-	type Frame,
+	Frame,
 	fromString,
 	OpenConnectionReplyOne,
 	OpenConnectionReplyTwo,
@@ -15,10 +15,12 @@ import {
 	OpenConnectionRequestTwo,
 	Packet,
 	type Priority,
+	Reliability,
 	Status,
 	UnconnectedPing,
 	UnconnectedPong,
 } from "../proto";
+import DisconnectionNotification from "../proto/packets/disconnect";
 import { type ClientOptions, defaultClientOptions } from "./client-options";
 import { Logger } from "../utils";
 import { Frameset } from "../proto/packets/frameset";
@@ -50,8 +52,7 @@ export class Client extends Emitter<ClientEvents> {
 			this.socket.on("message", (payload, rinfo) => {
 				this.framer.incommingMessage(payload, rinfo);
 			});
-		Logger.disabled = this.options.loggerDisabled;
-
+			Logger.disabled = this.options.loggerDisabled;
 		} catch (error) {
 			Logger.error(`Failed to create socket: ${error}`);
 		}
@@ -78,6 +79,9 @@ export class Client extends Emitter<ClientEvents> {
 	public async connect(): Promise<Advertisement> {
 		if (this.status === Status.Connecting) {
 			throw new Error("Connection attempt already in progress");
+		}
+		if (this.status === Status.Connected) {
+			throw new Error("Already connected");
 		}
 
 		this.status = Status.Connecting;
@@ -151,29 +155,72 @@ export class Client extends Emitter<ClientEvents> {
 	}
 
 	public sendFrame(frame: Frame, priority: Priority): void {
-		this.framer.sendFrame(frame, priority);
+		try {
+			this.framer.sendFrame(frame, priority);
+		} catch (error) {
+			Logger.error("[Raknet] Failed to send frame", error);
+		}
+	}
+
+	public frameAndSend(payload: Buffer, priority: Priority): void {
+		const frame = new Frame();
+		frame.reliability = Reliability.ReliableOrdered;
+		frame.payload = payload;
+		frame.orderChannel = 0;
+		this.sendFrame(frame, priority);
 	}
 
 	public send(buffer: Buffer) {
-		if (this.options.debug)
-			Logger.debug(
-				`Sending ${buffer[0]}, ${buffer.length} bytes to ${this.options.address}:${this.options.port}`,
-			);
-		this.socket.send(
-			buffer,
-			0,
-			buffer.length,
-			this.options.port,
-			this.options.address,
+		if (this.status === Status.Disconnected) {
+			Logger.warn("[Client] Attempting to send packet while disconnected");
+			return;
+		}
+
+		Logger.debug(
+			`[Client] Sending packet ${buffer[0]}, ${buffer.length} bytes to ${this.options.address}:${this.options.port}`,
 		);
+		Logger.debug(`[Client] Current connection status: ${Status[this.status]}`);
+
+		try {
+			this.socket.send(
+				buffer,
+				0,
+				buffer.length,
+				this.options.port,
+				this.options.address,
+			);
+		} catch (error) {
+			Logger.error("[Client] Failed to send packet", error as Error);
+			this.cleanup();
+		}
 	}
 
 	public cleanup(): void {
-		this.removeAll();
-		this.socket.removeAllListeners();
-		this.socket.close();
-		clearInterval(this.timer);
-		clearTimeout(this.timeout);
-		this.status = Status.Disconnected;
+		if (this.status === Status.Disconnected) {
+			return;
+		}
+
+		Logger.info("[Client] Cleaning up connection and resources");
+		const wasConnected = this.status === Status.Connected;
+		this.status = Status.Disconnecting;
+
+		try {
+			// Send disconnect notification if we were connected
+			if (wasConnected) {
+				const disconnect = new DisconnectionNotification();
+				this.send(disconnect.serialize());
+			}
+
+			this.removeAll();
+			this.socket.removeAllListeners();
+			this.socket.close();
+			clearInterval(this.timer);
+			clearTimeout(this.timeout);
+		} catch (error) {
+			Logger.error("[Client] Error during cleanup", error as Error);
+		} finally {
+			this.status = Status.Disconnected;
+			Logger.info("[Client] Cleanup complete, status set to Disconnected");
+		}
 	}
 }
