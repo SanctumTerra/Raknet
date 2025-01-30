@@ -164,7 +164,6 @@ export class Client extends Emitter<ClientEvents> {
 
 	public frameAndSend(payload: Buffer, priority: Priority): void {
 		const frame = new Frame();
-		frame.reliability = Reliability.ReliableOrdered;
 		frame.payload = payload;
 		frame.orderChannel = 0;
 		this.sendFrame(frame, priority);
@@ -179,7 +178,6 @@ export class Client extends Emitter<ClientEvents> {
 		Logger.debug(
 			`[Client] Sending packet ${buffer[0]}, ${buffer.length} bytes to ${this.options.address}:${this.options.port}`,
 		);
-		Logger.debug(`[Client] Current connection status: ${Status[this.status]}`);
 
 		try {
 			this.socket.send(
@@ -191,7 +189,7 @@ export class Client extends Emitter<ClientEvents> {
 			);
 		} catch (error) {
 			Logger.error("[Client] Failed to send packet", error as Error);
-			this.cleanup();
+			// this.cleanup();
 		}
 	}
 

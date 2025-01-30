@@ -49,8 +49,6 @@ export class Framer {
 	private outputFramesByteLength = 0;
 	public outputBackup = new Map<number, Frame[]>();
 	public _tickCount = 0;
-	private lastPingSent = 0;
-	private lastPongReceived = 0;
 
 	constructor(client: Client) {
 		this.client = client;
@@ -58,7 +56,6 @@ export class Framer {
 		this.outputFrameQueue.frames = [];
 		this.outputOrderIndex = Array.from<number>({ length: 32 }).fill(0);
 		this.outputSequenceIndex = Array.from<number>({ length: 32 }).fill(0);
-		this.lastPongReceived = Date.now();
 	}
 
 	public tick() {
@@ -73,27 +70,11 @@ export class Framer {
 			return;
 		}
 
-		const now = Date.now();
-
-		if (
-			now - this.lastPongReceived > 30000 &&
-			this.client.status === Status.Connected
-		) {
-			Logger.warn(
-				"[Framer] No pong received in last 30 seconds, disconnecting",
-			);
-			this.client.cleanup();
-			return;
-		}
-
 		if (this._tickCount % 50 === 0) {
-			this.lastPingSent = now;
+			const now = Date.now();
 			const ping = new ConnectedPing();
 			ping.timestamp = BigInt(now);
 			this.frameAndSend(ping.serialize(), Priority.Immediate);
-			Logger.debug(
-				`[Framer] Sent ping at ${now}, last pong received: ${this.lastPongReceived}`,
-			);
 		}
 
 		const ackSeqs = this.receivedFrameSequences;
@@ -248,7 +229,6 @@ export class Framer {
 				}
 				case Packet.ConnectedPong: {
 					const packet = new ConnectedPong(frame.payload).deserialize();
-					this.lastPongReceived = Date.now();
 					Logger.debug(
 						`[Framer] Received pong, latency: ${
 							Date.now() - Number(packet.pingTime)
@@ -453,7 +433,6 @@ export class Framer {
 		priority: Priority = Priority.Normal,
 	): void {
 		const frame = new Frame();
-		frame.reliability = Reliability.ReliableOrdered;
 		frame.orderChannel = 0;
 		frame.payload = payload;
 		this.sendFrame(frame, priority);
