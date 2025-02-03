@@ -32,7 +32,7 @@ export class BasePacket extends BinaryStream {
 	/**
 	 * Clears the packet.
 	 */
-	public clear(): void {
+	public flush(): void {
 		this.binary = [];
 	}
 }
