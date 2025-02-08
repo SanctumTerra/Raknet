@@ -6,31 +6,30 @@ import {
 	Ack,
 	type Address,
 	type Advertisement,
-	ConnectionRequest,
 	Frame,
 	fromString,
-	OpenConnectionReplyOne,
-	OpenConnectionReplyTwo,
+	type OpenConnectionReplyTwo,
 	OpenConnectionRequestOne,
-	OpenConnectionRequestTwo,
-	Packet,
 	type Priority,
-	Reliability,
 	Status,
 	UnconnectedPing,
-	UnconnectedPong,
+	type UnconnectedPong,
 } from "../proto";
 import DisconnectionNotification from "../proto/packets/disconnect";
 import { type ClientOptions, defaultClientOptions } from "./client-options";
 import { Logger } from "../utils";
 import { Frameset } from "../proto/packets/frameset";
 
+const TICK_INTERVAL = 50;
+const REQUEST_INTERVAL = 50;
+
 export class Client extends Emitter<ClientEvents> {
 	public socket!: Socket;
 	public framer!: Framer;
 	public options: ClientOptions;
-	private timer!: NodeJS.Timeout;
-	private timeout!: NodeJS.Timeout;
+	private tickTimer?: NodeJS.Timeout;
+	private connectionTimeout?: NodeJS.Timeout;
+	private requestInterval?: NodeJS.Timeout;
 	public serverAddress!: Address;
 
 	public status = Status.Disconnected;
@@ -38,7 +37,6 @@ export class Client extends Emitter<ClientEvents> {
 	constructor(options: Partial<ClientOptions> = defaultClientOptions) {
 		super();
 		this.options = { ...defaultClientOptions, ...options };
-		// 20 is enough, but 60 is incase someone will really need it
 		this.maxListeners = 60;
 	}
 
@@ -46,25 +44,32 @@ export class Client extends Emitter<ClientEvents> {
 		try {
 			this.socket = createSocket("udp4");
 			this.framer = new Framer(this);
+
 			this.remove("tick", () => this.framer.tick());
 			this.on("tick", () => this.framer.tick());
+
 			this.socket.removeAllListeners("message");
 			this.socket.on("message", (payload, rinfo) => {
 				this.framer.incommingMessage(payload, rinfo);
 			});
+
+			this.socket.on("error", (err) => {
+				Logger.error(`[Client] Socket error: ${err}`);
+			});
+
 			Logger.disabled = this.options.loggerDisabled;
 		} catch (error) {
 			Logger.error(`Failed to create socket: ${error}`);
 		}
 	}
 
-	public async ping(): Promise<Advertisement | null> {
-		return new Promise((resolve) => {
+	public async ping(): Promise<Advertisement> {
+		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
-				throw new Error("Failed to ping, timed out.");
+				reject(new Error("Failed to ping, timed out."));
 			}, this.options.timeout);
 
-			this.on("unconnected-pong", (packet) => {
+			this.once("unconnected-pong", (packet: UnconnectedPong) => {
 				clearTimeout(timeout);
 				resolve(fromString(packet.message));
 			});
@@ -87,7 +92,7 @@ export class Client extends Emitter<ClientEvents> {
 		this.status = Status.Connecting;
 		this.initSocket();
 
-		this.timer = setInterval(() => this.emit("tick"), 50);
+		this.tickTimer = setInterval(() => this.emit("tick"), TICK_INTERVAL);
 
 		try {
 			const advertisement = await this.ping();
@@ -98,15 +103,21 @@ export class Client extends Emitter<ClientEvents> {
 				let shouldContinueSending = true;
 
 				const cleanup = () => {
-					clearTimeout(connectionTimeout);
-					clearInterval(requestInterval);
+					if (this.connectionTimeout) {
+						clearTimeout(this.connectionTimeout);
+						this.connectionTimeout = undefined;
+					}
+					if (this.requestInterval) {
+						clearInterval(this.requestInterval);
+						this.requestInterval = undefined;
+					}
 					if (!isResolved) {
 						Logger.error("Could not resolve connection.");
 						this.cleanup();
 					}
 				};
 
-				const connectionTimeout = setTimeout(() => {
+				this.connectionTimeout = setTimeout(() => {
 					cleanup();
 					reject(new Error("Connection timed out"));
 				}, this.options.timeout);
@@ -115,30 +126,34 @@ export class Client extends Emitter<ClientEvents> {
 				request.mtu = this.options.mtuSize;
 				request.protocol = this.options.protocolVersion;
 
-				this.on("open-connection-reply-two", (packet) => {
-					const mtu = packet.mtu;
-					if (mtu > 400 && mtu < 1500) {
-						shouldContinueSending = false;
-					} else {
-						cleanup();
-						reject(new Error(`Invalid MTU size: ${mtu}`));
-					}
-				});
+				this.once(
+					"open-connection-reply-two",
+					(packet: OpenConnectionReplyTwo) => {
+						const mtu = packet.mtu;
+						if (mtu > 400 && mtu < 1500) {
+							shouldContinueSending = false;
+						} else {
+							cleanup();
+							reject(new Error(`Invalid MTU size: ${mtu}`));
+						}
+					},
+				);
 
 				this.emit("open-connection-request-one", request);
 				this.send(request.serialize());
 
-				const requestInterval = setInterval(() => {
+				this.requestInterval = setInterval(() => {
 					if (!isResolved && shouldContinueSending) {
 						this.send(request.serialize());
 					}
-				}, 50);
+				}, REQUEST_INTERVAL);
 
-				this.onceAfter("new-incoming-connection", () => {
+				this.once("new-incoming-connection", () => {
 					if (!isResolved) {
 						isResolved = true;
 						this.emit("connect", advertisement);
 						this.status = Status.Connected;
+						cleanup();
 						resolve(advertisement);
 					}
 				});
@@ -158,7 +173,7 @@ export class Client extends Emitter<ClientEvents> {
 		try {
 			this.framer.sendFrame(frame, priority);
 		} catch (error) {
-			Logger.error("[Raknet] Failed to send frame", error);
+			Logger.error("[Client] Failed to send frame", error);
 		}
 	}
 
@@ -169,7 +184,7 @@ export class Client extends Emitter<ClientEvents> {
 		this.sendFrame(frame, priority);
 	}
 
-	public send(buffer: Buffer) {
+	public send(buffer: Buffer): void {
 		if (this.status === Status.Disconnected) {
 			Logger.warn("[Client] Attempting to send packet while disconnected");
 			return;
@@ -186,10 +201,14 @@ export class Client extends Emitter<ClientEvents> {
 				buffer.length,
 				this.options.port,
 				this.options.address,
+				(err) => {
+					if (err) {
+						Logger.error("[Client] Failed to send packet", err);
+					}
+				},
 			);
 		} catch (error) {
 			Logger.error("[Client] Failed to send packet", error as Error);
-			// this.cleanup();
 		}
 	}
 
@@ -203,7 +222,6 @@ export class Client extends Emitter<ClientEvents> {
 		this.status = Status.Disconnecting;
 
 		try {
-			// Send disconnect notification if we were connected
 			if (wasConnected) {
 				const disconnect = new DisconnectionNotification();
 				this.send(disconnect.serialize());
@@ -212,8 +230,19 @@ export class Client extends Emitter<ClientEvents> {
 			this.removeAll();
 			this.socket.removeAllListeners();
 			this.socket.close();
-			clearInterval(this.timer);
-			clearTimeout(this.timeout);
+
+			if (this.tickTimer) {
+				clearInterval(this.tickTimer);
+				this.tickTimer = undefined;
+			}
+			if (this.connectionTimeout) {
+				clearTimeout(this.connectionTimeout);
+				this.connectionTimeout = undefined;
+			}
+			if (this.requestInterval) {
+				clearInterval(this.requestInterval);
+				this.requestInterval = undefined;
+			}
 		} catch (error) {
 			Logger.error("[Client] Error during cleanup", error as Error);
 		} finally {

@@ -80,6 +80,7 @@ class Server extends Emitter<ServerEvents> {
 		let packetId = message[0];
 		if ((packetId & 0xf0) === 0x80) packetId = 0x80;
 		const remoteAddr = remote.address;
+		// console.log(`Message: ${message} from ${remoteAddr}`);
 		if (this.blockedConnections.has(remoteAddr)) {
 			return;
 		}

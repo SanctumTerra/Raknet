@@ -15,7 +15,7 @@ server.start();
 
 server.on("connect", (connection: Connection) => {
 	Logger.info(
-		`Connection from ${connection.remoteInfo.address}:${connection.remoteInfo.port} established in unknown ms`,
+		`Connection from ${connection.remoteInfo.address}:${connection.remoteInfo.port} established in ${connection.getConnectionTime()} ms`,
 	);
 	connection.on("encapsulated", (packet: Buffer) => {
 		Logger.info(`Received Encapsulated packet: ${packet.toString("hex")}`);
@@ -31,7 +31,7 @@ process.on("SIGINT", () => {
 	}
 	attempt++;
 	// We may be desperate here
-	if (attempt > 10) {
+	if (attempt > 2) {
 		process.exit(0);
 	}
 	return false;
