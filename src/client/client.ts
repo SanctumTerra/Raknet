@@ -24,13 +24,13 @@ const TICK_INTERVAL = 50;
 const REQUEST_INTERVAL = 50;
 
 export class Client extends Emitter<ClientEvents> {
-	public socket!: Socket;
-	public framer!: Framer;
+	public socket!: Socket | null;
+	public framer!: Framer | null;
 	public options: ClientOptions;
 	private tickTimer?: NodeJS.Timeout;
 	private connectionTimeout?: NodeJS.Timeout;
 	private requestInterval?: NodeJS.Timeout;
-	public serverAddress!: Address;
+	public serverAddress!: Address | null;
 
 	public status = Status.Disconnected;
 
@@ -45,12 +45,12 @@ export class Client extends Emitter<ClientEvents> {
 			this.socket = createSocket("udp4");
 			this.framer = new Framer(this);
 
-			this.remove("tick", () => this.framer.tick());
-			this.on("tick", () => this.framer.tick());
+			this.remove("tick", () => this.framer?.tick());
+			this.on("tick", () => this.framer?.tick());
 
-			this.socket.removeAllListeners("message");
+			this.socket.removeAllListeners();
 			this.socket.on("message", (payload, rinfo) => {
-				this.framer.incommingMessage(payload, rinfo);
+				this.framer?.incommingMessage(payload, rinfo);
 			});
 
 			this.socket.on("error", (err) => {
@@ -171,6 +171,10 @@ export class Client extends Emitter<ClientEvents> {
 
 	public sendFrame(frame: Frame, priority: Priority): void {
 		try {
+			if (!this.framer) {
+				Logger.error("[Client] Cannot send frame: framer is null");
+				return;
+			}
 			this.framer.sendFrame(frame, priority);
 		} catch (error) {
 			Logger.error("[Client] Failed to send frame", error);
@@ -187,6 +191,11 @@ export class Client extends Emitter<ClientEvents> {
 	public send(buffer: Buffer): void {
 		if (this.status === Status.Disconnected) {
 			Logger.warn("[Client] Attempting to send packet while disconnected");
+			return;
+		}
+
+		if (!this.socket) {
+			Logger.error("[Client] Cannot send packet: socket is null");
 			return;
 		}
 
@@ -210,6 +219,62 @@ export class Client extends Emitter<ClientEvents> {
 		} catch (error) {
 			Logger.error("[Client] Failed to send packet", error as Error);
 		}
+	}
+
+	private cleanupSocket() {
+		if (!this.socket) return;
+		try {
+			this.socket.removeAllListeners();
+			Logger.cleanup();
+			if (this.status === Status.Connected) {
+				const disconnect = new DisconnectionNotification();
+				this.socket.send(
+					disconnect.serialize(),
+					0,
+					disconnect.serialize().length,
+					this.options.port,
+					this.options.address,
+				);
+			}
+
+			const stateSymbol = Symbol.for("state symbol");
+			const socketWithState = this.socket as unknown as {
+				[key: symbol]: { handle: { close: () => void } | null };
+			};
+			const state = socketWithState[stateSymbol];
+			if (state?.handle) {
+				state.handle.close();
+				state.handle = null;
+			}
+
+			this.socket.close(() => {
+				console.log("socket closed");
+				this.socket?.removeAllListeners();
+			});
+
+			// (this.socket as { _handle?: unknown })._handle = undefined;
+		} catch (err) {
+			Logger.error("[Client] Error during socket cleanup", err as Error);
+			try {
+				const stateSymbol = Symbol.for("state symbol");
+				const socketWithState = this.socket as unknown as {
+					[key: symbol]: { handle: { close: () => void } | null };
+				};
+				const state = socketWithState[stateSymbol];
+				if (state?.handle) {
+					state.handle.close();
+					state.handle = null;
+				}
+			} catch (_) {}
+			this.socket = null;
+		}
+	}
+
+	private cleanupFramer() {
+		if (!this.framer) return;
+		(this.framer as { _events?: unknown })._events = undefined;
+		(this.framer as { _eventsCount?: unknown })._eventsCount = undefined;
+		this.framer = null;
 	}
 
 	public cleanup(): void {
@@ -237,56 +302,13 @@ export class Client extends Emitter<ClientEvents> {
 		this.removeAll();
 		this.removeAllAfter();
 		this.removeAllBefore();
-		
-		if (this.socket) {
-			try {
-				this.socket.removeAllListeners();
-				Logger.cleanup();
-				if (wasConnected) {
-					const disconnect = new DisconnectionNotification();
-					this.socket.send(
-						disconnect.serialize(),
-						0,
-						disconnect.serialize().length,
-						this.options.port,
-						this.options.address
-					);
-				}
 
-				const state = (this.socket as any)[Symbol.for('state symbol')];
-				if (state?.handle) {
-					state.handle.close();
-					state.handle = null;
-				}
-				
-				this.socket.close(() => {
-					console.log("socket closed");	
-					this.socket.removeAllListeners();
-				});
-				
-				delete (this.socket as any)._handle;
-			} catch (err) {
-				Logger.error("[Client] Error during socket cleanup", err as Error);
-				try {
-					const state = (this.socket as any)[Symbol.for('state symbol')];
-					if (state?.handle) {
-						state.handle.close();
-						state.handle = null;
-					}
-				} catch (_) {}
-				this.socket = undefined as any;
-			}
-		}
+		this.cleanupSocket();
+		this.cleanupFramer();
 
-		if (this.framer) {
-			delete (this.framer as any)._events;
-			delete (this.framer as any)._eventsCount;
-			this.framer = undefined as any;
-		}
-
-		this.serverAddress = undefined as any;
-		delete (this as any)._events;
-		delete (this as any)._eventsCount;
+		this.serverAddress = null;
+		(this as { _events?: unknown })._events = undefined;
+		(this as { _eventsCount?: unknown })._eventsCount = undefined;
 		this.status = Status.Disconnected;
 
 		Logger.debug("[Client] Cleanup complete");

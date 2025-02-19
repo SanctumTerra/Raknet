@@ -73,11 +73,11 @@ const Logger = {
 
 	log(...data: LogData[]): void {
 		if (this.disabled) return;
-		this._stdout.write(this.date() + " " + this.colorize(...data).join(" ") + "\n");
+		this._stdout.write(`${this.date()} ${this.colorize(...data).join(" ")}\n`);
 	},
 
 	_log(...data: LogData[]): void {
-		this._stdout.write(this.colorize(...data).join(" ") + "\n");
+		this._stdout.write(`${this.colorize(...data).join(" ")}\n`);
 	},
 
 	colorize(...args: LogData[]): (string | LogData)[] {
@@ -117,9 +117,9 @@ const Logger = {
 
 	cleanup(): void {
 		this.disabled = true;
-		this._stdout = undefined as any;
-		this._stderr = undefined as any;
-	}
+		this._stdout = undefined as unknown as NodeJS.WriteStream & { fd: 1 };
+		this._stderr = undefined as unknown as NodeJS.WriteStream & { fd: 2 };
+	},
 };
 
 export { Logger };

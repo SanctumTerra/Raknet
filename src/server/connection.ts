@@ -51,7 +51,8 @@ class Connection extends Emitter<ConnectionEvents> {
 	protected fragmentsQueue: Map<number, FragmentGroup> = new Map();
 
 	private inputOrderIndex: number[] = new Array(64).fill(0);
-	protected inputOrderingQueue: Map<number, Map<number, QueuedFrame>> = new Map();
+	protected inputOrderingQueue: Map<number, Map<number, QueuedFrame>> =
+		new Map();
 	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
 
 	public outputOrderIndex: number[];
@@ -91,12 +92,16 @@ class Connection extends Emitter<ConnectionEvents> {
 	public tick() {
 		const now = Date.now();
 
-		Logger.debug(`[Connection] Time since last update: ${now - this.lastUpdate} ms`);
+		Logger.debug(
+			`[Connection] Time since last update: ${now - this.lastUpdate} ms`,
+		);
 		if (now - this.lastUpdate > this.server.options.connectionTimeout) {
 			Logger.warn(
-				`Connection to ${this.remoteInfo.address}:${this.remoteInfo.port} timed out`
+				`Connection to ${this.remoteInfo.address}:${this.remoteInfo.port} timed out`,
 			);
-			this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
+			this.server.deleteConnection(
+				`${this.remoteInfo.address}:${this.remoteInfo.port}`,
+			);
 			return;
 		}
 
@@ -119,10 +124,10 @@ class Connection extends Emitter<ConnectionEvents> {
 			if (!queue) continue;
 			const expectedIndex = this.inputOrderIndex[channel];
 			if (queue.has(expectedIndex)) {
-				const queued = queue.get(expectedIndex)!;
-				if (now - queued.timestamp > this.ORDERING_QUEUE_TIMEOUT) {
+				const queued = queue.get(expectedIndex);
+				if (queued && now - queued.timestamp > this.ORDERING_QUEUE_TIMEOUT) {
 					Logger.warn(
-						`[Connection] Timeout waiting for ordered frame ${expectedIndex} on channel ${channel}; processing it to unblock.`
+						`[Connection] Timeout waiting for ordered frame ${expectedIndex} on channel ${channel}; processing it to unblock.`,
 					);
 					this.handlePackets(queued.frame.payload);
 					queue.delete(expectedIndex);
@@ -137,13 +142,13 @@ class Connection extends Emitter<ConnectionEvents> {
 	private handlePackets(message: Buffer) {
 		const packetId = message[0];
 		Logger.debug(
-			`Received packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
+			`Received packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
 		);
 		switch (packetId) {
 			case Packet.ConnectionRequest: {
 				const connectionRequest = new ConnectionRequest(message).deserialize();
 				Logger.debug(
-					`Received ConnectionRequest from ${this.remoteInfo.address}:${this.remoteInfo.port}`
+					`Received ConnectionRequest from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
 				);
 				const accepted = new ConnectionRequestAccepted();
 				const version = this.remoteInfo.address.includes(":") ? 6 : 4;
@@ -191,7 +196,9 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			case Packet.DisconnectionNotification: {
 				this.emit("disconnect");
-				this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
+				this.server.deleteConnection(
+					`${this.remoteInfo.address}:${this.remoteInfo.port}`,
+				);
 				break;
 			}
 			case 254: {
@@ -201,7 +208,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			default: {
 				Logger.warn(
-					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
+					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
 				);
 				break;
 			}
@@ -219,7 +226,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			case Packet.FrameSet: {
 				const frameset = new Frameset(message).deserialize();
 				Logger.debug(
-					`Received FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with sequence ${frameset.sequence}`
+					`Received FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with sequence ${frameset.sequence}`,
 				);
 				this.handleFrameSet(frameset);
 				break;
@@ -245,7 +252,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			default: {
 				Logger.warn(
-					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
+					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
 				);
 				break;
 			}
@@ -259,7 +266,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			this.receivedFrameSequences.has(sequence)
 		) {
 			Logger.debug(
-				`Skipping FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} - sequence ${sequence} (duplicate/old)`
+				`Skipping FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} - sequence ${sequence} (duplicate/old)`,
 			);
 			return;
 		}
@@ -269,7 +276,9 @@ class Connection extends Emitter<ConnectionEvents> {
 			frameset.sequence < this.lastInputSequence ||
 			frameset.sequence === this.lastInputSequence
 		) {
-			Logger.debug(`Out of order Frameset from ${this.remoteInfo.address}:${this.remoteInfo.port}`);
+			Logger.debug(
+				`Out of order Frameset from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
+			);
 			return;
 		}
 
@@ -277,16 +286,15 @@ class Connection extends Emitter<ConnectionEvents> {
 
 		if (frameset.sequence - this.lastInputSequence > 1) {
 			for (
-			  let index = this.lastInputSequence + 1;
-			  index < frameset.sequence;
-			  index++
+				let index = this.lastInputSequence + 1;
+				index < frameset.sequence;
+				index++
 			)
-			this.lostFrameSequences.add(index);
+				this.lostFrameSequences.add(index);
 		}
 		console.log(this.lastInputSequence, frameset.sequence);
-		
-		this.lastInputSequence = sequence;
 
+		this.lastInputSequence = sequence;
 
 		for (let i = 0, len = frameset.frames.length; i < len; i++) {
 			this.handleFrame(frameset.frames[i]);
@@ -328,9 +336,11 @@ class Connection extends Emitter<ConnectionEvents> {
 			const buffer = Buffer.allocUnsafe(totalSize);
 			let offset = 0;
 			for (let i = 0; i < frame.splitCount; i++) {
-				const sframe = group.fragments.get(i)!;
-				sframe.payload.copy(buffer, offset);
-				offset += sframe.payload.length;
+				const sframe = group.fragments.get(i);
+				if (sframe) {
+					sframe.payload.copy(buffer, offset);
+					offset += sframe.payload.length;
+				}
 			}
 
 			const reassembledFrame = new Frame();
@@ -360,10 +370,12 @@ class Connection extends Emitter<ConnectionEvents> {
 			if (queue) {
 				let nextIndex = frameIndex + 1;
 				while (queue.has(nextIndex)) {
-					const queued = queue.get(nextIndex)!;
-					this.handlePackets(queued.frame.payload);
-					queue.delete(nextIndex);
-					nextIndex++;
+					const queued = queue.get(nextIndex);
+					if (queued) {
+						this.handlePackets(queued.frame.payload);
+						queue.delete(nextIndex);
+						nextIndex++;
+					}
 				}
 				this.inputOrderIndex[channel] = nextIndex;
 			}
@@ -451,13 +463,15 @@ class Connection extends Emitter<ConnectionEvents> {
 	private queueFrame(frame: Frame, priority: Priority): void {
 		const frameLength = frame.getByteLength();
 		Logger.debug(
-			`[Connection] Queueing frame (length=${frameLength}). Queue count before push: ${this.outputFrameQueue.length}.`
+			`[Connection] Queueing frame (length=${frameLength}). Queue count before push: ${this.outputFrameQueue.length}.`,
 		);
 		this.outputFrameQueue.push(frame);
 		this.outputFramesByteLength += frameLength;
 
 		if (priority === Priority.Immediate) {
-			Logger.debug(`[Connection] Immediate frame queued. Flushing output queue.`);
+			Logger.debug(
+				"[Connection] Immediate frame queued. Flushing output queue.",
+			);
 			this.sendQueue(this.outputFrameQueue.length);
 		}
 	}
@@ -465,7 +479,7 @@ class Connection extends Emitter<ConnectionEvents> {
 	public sendQueue(amount: number): void {
 		if (this.outputFrameQueue.length === 0) return;
 		Logger.debug(
-			`[Connection] Flushing output queue: sending ${amount} frame(s), total bytes = ${this.outputFramesByteLength}.`
+			`[Connection] Flushing output queue: sending ${amount} frame(s), total bytes = ${this.outputFramesByteLength}.`,
 		);
 		const frameset = new Frameset();
 		frameset.sequence = this.outputSequence++;
@@ -478,7 +492,9 @@ class Connection extends Emitter<ConnectionEvents> {
 		frameset.frames = framesToSend;
 		this.outputBackup.set(frameset.sequence, frameset.frames);
 		const serialized = frameset.serialize();
-		Logger.debug(`[Connection] Sending frameset sequence ${frameset.sequence}, serialized length = ${serialized.byteLength}.`);
+		Logger.debug(
+			`[Connection] Sending frameset sequence ${frameset.sequence}, serialized length = ${serialized.byteLength}.`,
+		);
 		this.send(serialized);
 	}
 
@@ -504,14 +520,18 @@ class Connection extends Emitter<ConnectionEvents> {
 		this.status = Status.Disconnected;
 		if (timeout) {
 			setTimeout(() => {
-				this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
+				this.server.deleteConnection(
+					`${this.remoteInfo.address}:${this.remoteInfo.port}`,
+				);
 			}, 1000);
 		}
 	}
 
 	public getConnectionTime(type: "ms" | "s" | "min" = "ms"): number {
 		const time =
-			this.server.connectionTimes.get(`${this.remoteInfo.address}:${this.remoteInfo.port}`) ?? 0;
+			this.server.connectionTimes.get(
+				`${this.remoteInfo.address}:${this.remoteInfo.port}`,
+			) ?? 0;
 		if (type === "ms") return time;
 		if (type === "s") return time / 1000;
 		if (type === "min") return time / 60000;
