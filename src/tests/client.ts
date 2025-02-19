@@ -10,4 +10,5 @@ const client = new Client({
 });
 client.connect().then(() => {
 	console.timeEnd("connect");
+	client.disconnect();
 });

@@ -40,6 +40,8 @@ const specialFormatting: { [key: string]: string } = {
 const Logger = {
 	disabled: false,
 	debugEnabled: false,
+	_stdout: process.stdout,
+	_stderr: process.stderr,
 
 	info(...data: LogData[]): void {
 		this.log("§7<§l§bINFO§7>§r", ...data);
@@ -71,18 +73,18 @@ const Logger = {
 
 	log(...data: LogData[]): void {
 		if (this.disabled) return;
-		console.log(this.date(), ...this.colorize(...data));
+		this._stdout.write(this.date() + " " + this.colorize(...data).join(" ") + "\n");
 	},
 
 	_log(...data: LogData[]): void {
-		console.log(...this.colorize(...data));
+		this._stdout.write(this.colorize(...data).join(" ") + "\n");
 	},
 
 	colorize(...args: LogData[]): (string | LogData)[] {
 		const regex = /§[0-9a-zA-Z]/g;
 
 		return args.map((arg) => {
-			if (typeof arg !== "string") return arg;
+			if (typeof arg !== "string") return String(arg);
 			let result = "";
 			let lastIndex = 0;
 			let currentColor = "";
@@ -112,6 +114,12 @@ const Logger = {
 			return result + colors.r;
 		});
 	},
+
+	cleanup(): void {
+		this.disabled = true;
+		this._stdout = undefined as any;
+		this._stderr = undefined as any;
+	}
 };
 
 export { Logger };

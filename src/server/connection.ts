@@ -26,6 +26,16 @@ type ConnectionEvents = {
 	encapsulated: [Buffer];
 };
 
+interface QueuedFrame {
+	frame: Frame;
+	timestamp: number;
+}
+
+interface FragmentGroup {
+	fragments: Map<number, Frame>;
+	timestamp: number;
+}
+
 class Connection extends Emitter<ConnectionEvents> {
 	public readonly server: Server;
 	public readonly remoteInfo: RemoteInfo;
@@ -38,11 +48,10 @@ class Connection extends Emitter<ConnectionEvents> {
 	protected readonly receivedFrameSequences = new Set<number>();
 	protected readonly lostFrameSequences = new Set<number>();
 	protected lastInputSequence = -1;
-	protected fragmentsQueue: Map<number, Map<number, Frame>> = new Map();
+	protected fragmentsQueue: Map<number, FragmentGroup> = new Map();
 
-	// For ordered & sequenced packets
 	private inputOrderIndex: number[] = new Array(64).fill(0);
-	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
+	protected inputOrderingQueue: Map<number, Map<number, QueuedFrame>> = new Map();
 	private inputHighestSequenceIndex: number[] = new Array(64).fill(0);
 
 	public outputOrderIndex: number[];
@@ -54,6 +63,8 @@ class Connection extends Emitter<ConnectionEvents> {
 	protected outputSplitIndex = 0;
 	protected outputReliableIndex = 0;
 	public outputBackup = new Map<number, Frame[]>();
+
+	private readonly ORDERING_QUEUE_TIMEOUT = 500;
 
 	constructor(
 		server: Server,
@@ -73,19 +84,19 @@ class Connection extends Emitter<ConnectionEvents> {
 		this.outputSequenceIndex = new Array(32).fill(0);
 
 		for (let i = 0; i < 64; i++) {
-			this.inputOrderingQueue.set(i, new Map<number, Frame>());
+			this.inputOrderingQueue.set(i, new Map<number, QueuedFrame>());
 		}
 	}
 
 	public tick() {
 		const now = Date.now();
+
+		Logger.debug(`[Connection] Time since last update: ${now - this.lastUpdate} ms`);
 		if (now - this.lastUpdate > this.server.options.connectionTimeout) {
 			Logger.warn(
-				`Connection to ${this.remoteInfo.address}:${this.remoteInfo.port} timed out`,
+				`Connection to ${this.remoteInfo.address}:${this.remoteInfo.port} timed out`
 			);
-			this.server.deleteConnection(
-				`${this.remoteInfo.address}:${this.remoteInfo.port}`,
-			);
+			this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
 			return;
 		}
 
@@ -103,19 +114,36 @@ class Connection extends Emitter<ConnectionEvents> {
 			this.send(nack.serialize());
 		}
 
+		for (let channel = 0; channel < 64; channel++) {
+			const queue = this.inputOrderingQueue.get(channel);
+			if (!queue) continue;
+			const expectedIndex = this.inputOrderIndex[channel];
+			if (queue.has(expectedIndex)) {
+				const queued = queue.get(expectedIndex)!;
+				if (now - queued.timestamp > this.ORDERING_QUEUE_TIMEOUT) {
+					Logger.warn(
+						`[Connection] Timeout waiting for ordered frame ${expectedIndex} on channel ${channel}; processing it to unblock.`
+					);
+					this.handlePackets(queued.frame.payload);
+					queue.delete(expectedIndex);
+					this.inputOrderIndex[channel] = expectedIndex + 1;
+				}
+			}
+		}
+
 		this.sendQueue(this.outputFrameQueue.length);
 	}
 
 	private handlePackets(message: Buffer) {
 		const packetId = message[0];
 		Logger.debug(
-			`Received packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
+			`Received packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
 		);
 		switch (packetId) {
 			case Packet.ConnectionRequest: {
 				const connectionRequest = new ConnectionRequest(message).deserialize();
 				Logger.debug(
-					`Received ConnectionRequest from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
+					`Received ConnectionRequest from ${this.remoteInfo.address}:${this.remoteInfo.port}`
 				);
 				const accepted = new ConnectionRequestAccepted();
 				const version = this.remoteInfo.address.includes(":") ? 6 : 4;
@@ -163,9 +191,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			case Packet.DisconnectionNotification: {
 				this.emit("disconnect");
-				this.server.deleteConnection(
-					`${this.remoteInfo.address}:${this.remoteInfo.port}`,
-				);
+				this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
 				break;
 			}
 			case 254: {
@@ -175,7 +201,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			default: {
 				Logger.warn(
-					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
+					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
 				);
 				break;
 			}
@@ -184,15 +210,16 @@ class Connection extends Emitter<ConnectionEvents> {
 
 	public handle(message: Buffer) {
 		if (this.status === Status.Disconnected) return;
+		this.lastUpdate = Date.now();
+
 		let packetId = message[0];
 		if ((packetId & 0xf0) === 0x80) packetId = 0x80;
-		this.lastUpdate = Date.now();
 
 		switch (packetId) {
 			case Packet.FrameSet: {
 				const frameset = new Frameset(message).deserialize();
 				Logger.debug(
-					`Received FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with sequence ${frameset.sequence}`,
+					`Received FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} with sequence ${frameset.sequence}`
 				);
 				this.handleFrameSet(frameset);
 				break;
@@ -218,7 +245,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			}
 			default: {
 				Logger.warn(
-					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`,
+					`Received unknown packet ${packetId} from ${this.remoteInfo.address}:${this.remoteInfo.port}`
 				);
 				break;
 			}
@@ -232,18 +259,34 @@ class Connection extends Emitter<ConnectionEvents> {
 			this.receivedFrameSequences.has(sequence)
 		) {
 			Logger.debug(
-				`Skipping FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} - sequence ${sequence} (duplicate/old)`,
+				`Skipping FrameSet from ${this.remoteInfo.address}:${this.remoteInfo.port} - sequence ${sequence} (duplicate/old)`
 			);
 			return;
 		}
+		this.lostFrameSequences.delete(sequence);
 
-		for (let seq = this.lastInputSequence + 1; seq < sequence; seq++) {
-			this.lostFrameSequences.add(seq);
+		if (
+			frameset.sequence < this.lastInputSequence ||
+			frameset.sequence === this.lastInputSequence
+		) {
+			Logger.debug(`Out of order Frameset from ${this.remoteInfo.address}:${this.remoteInfo.port}`);
+			return;
 		}
 
-		this.lostFrameSequences.delete(sequence);
 		this.receivedFrameSequences.add(sequence);
+
+		if (frameset.sequence - this.lastInputSequence > 1) {
+			for (
+			  let index = this.lastInputSequence + 1;
+			  index < frameset.sequence;
+			  index++
+			)
+			this.lostFrameSequences.add(index);
+		}
+		console.log(this.lastInputSequence, frameset.sequence);
+		
 		this.lastInputSequence = sequence;
+
 
 		for (let i = 0, len = frameset.frames.length; i < len; i++) {
 			this.handleFrame(frameset.frames[i]);
@@ -264,31 +307,29 @@ class Connection extends Emitter<ConnectionEvents> {
 
 	private handleSplit(frame: Frame) {
 		const splitId = frame.splitId;
-		let fragment = this.fragmentsQueue.get(splitId);
-		if (!fragment) {
-			fragment = new Map<number, Frame>();
-			this.fragmentsQueue.set(splitId, fragment);
+		let group = this.fragmentsQueue.get(splitId);
+		if (!group) {
+			group = { fragments: new Map<number, Frame>(), timestamp: Date.now() };
+			this.fragmentsQueue.set(splitId, group);
 		}
-		fragment.set(frame.splitFrameIndex, frame);
+		group.fragments.set(frame.splitFrameIndex, frame);
 
-		if (fragment.size === frame.splitCount) {
+		if (group.fragments.size === frame.splitCount) {
 			let totalSize = 0;
 			for (let i = 0; i < frame.splitCount; i++) {
-				const sframe = fragment.get(i);
+				const sframe = group.fragments.get(i);
 				if (!sframe) {
 					Logger.error(`Missing fragment at index ${i} for splitId=${splitId}`);
-					this.fragmentsQueue.delete(splitId);
 					return;
 				}
 				totalSize += sframe.payload.length;
 			}
 
-			const stream = Buffer.allocUnsafe(totalSize);
+			const buffer = Buffer.allocUnsafe(totalSize);
 			let offset = 0;
 			for (let i = 0; i < frame.splitCount; i++) {
-				// biome-ignore lint/style/noNonNullAssertion: <explanation>
-				const sframe = fragment.get(i)!;
-				sframe.payload.copy(stream, offset);
+				const sframe = group.fragments.get(i)!;
+				sframe.payload.copy(buffer, offset);
 				offset += sframe.payload.length;
 			}
 
@@ -298,7 +339,7 @@ class Connection extends Emitter<ConnectionEvents> {
 			reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
 			reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
 			reassembledFrame.orderChannel = frame.orderChannel;
-			reassembledFrame.payload = stream;
+			reassembledFrame.payload = buffer;
 
 			this.fragmentsQueue.delete(splitId);
 			this.handleFrame(reassembledFrame);
@@ -316,20 +357,20 @@ class Connection extends Emitter<ConnectionEvents> {
 			this.inputHighestSequenceIndex[channel] = 0;
 
 			const queue = this.inputOrderingQueue.get(channel);
-			if (!queue) return;
-			let nextIndex = frameIndex + 1;
-			while (queue.has(nextIndex)) {
-				// biome-ignore lint/style/noNonNullAssertion: <explanation>
-				const nextFrame = queue.get(nextIndex)!;
-				this.handlePackets(nextFrame.payload);
-				queue.delete(nextIndex);
-				nextIndex++;
+			if (queue) {
+				let nextIndex = frameIndex + 1;
+				while (queue.has(nextIndex)) {
+					const queued = queue.get(nextIndex)!;
+					this.handlePackets(queued.frame.payload);
+					queue.delete(nextIndex);
+					nextIndex++;
+				}
+				this.inputOrderIndex[channel] = nextIndex;
 			}
-			this.inputOrderIndex[channel] = nextIndex;
 		} else if (frameIndex > expectedIndex) {
 			const queue = this.inputOrderingQueue.get(channel);
 			if (queue) {
-				queue.set(frameIndex, frame);
+				queue.set(frameIndex, { frame, timestamp: Date.now() });
 			}
 		}
 	}
@@ -404,33 +445,31 @@ class Connection extends Emitter<ConnectionEvents> {
 		nframe.splitFrameIndex = index / maxSize;
 		nframe.splitId = splitId;
 		nframe.splitCount = splitSize;
-		if (nframe.isReliable) {
-			nframe.reliableFrameIndex = this.outputReliableIndex++;
-		}
 		return nframe;
 	}
 
 	private queueFrame(frame: Frame, priority: Priority): void {
 		const frameLength = frame.getByteLength();
-		// Check if adding this frame would exceed the available MTU capacity.
-		if (this.outputFramesByteLength + frameLength + 4 > this.mtu - 36) {
-			this.sendQueue(this.outputFrameQueue.length);
-		}
+		Logger.debug(
+			`[Connection] Queueing frame (length=${frameLength}). Queue count before push: ${this.outputFrameQueue.length}.`
+		);
 		this.outputFrameQueue.push(frame);
 		this.outputFramesByteLength += frameLength;
 
 		if (priority === Priority.Immediate) {
-			this.sendQueue(1);
+			Logger.debug(`[Connection] Immediate frame queued. Flushing output queue.`);
+			this.sendQueue(this.outputFrameQueue.length);
 		}
 	}
 
 	public sendQueue(amount: number): void {
 		if (this.outputFrameQueue.length === 0) return;
+		Logger.debug(
+			`[Connection] Flushing output queue: sending ${amount} frame(s), total bytes = ${this.outputFramesByteLength}.`
+		);
 		const frameset = new Frameset();
 		frameset.sequence = this.outputSequence++;
-		// Remove the first "amount" of frames from the queue
 		const framesToSend = this.outputFrameQueue.splice(0, amount);
-		// Update the running total
 		let sentLength = 0;
 		for (const frame of framesToSend) {
 			sentLength += frame.getByteLength();
@@ -438,7 +477,9 @@ class Connection extends Emitter<ConnectionEvents> {
 		this.outputFramesByteLength -= sentLength;
 		frameset.frames = framesToSend;
 		this.outputBackup.set(frameset.sequence, frameset.frames);
-		this.send(frameset.serialize());
+		const serialized = frameset.serialize();
+		Logger.debug(`[Connection] Sending frameset sequence ${frameset.sequence}, serialized length = ${serialized.byteLength}.`);
+		this.send(serialized);
 	}
 
 	public frameAndSend(
@@ -463,18 +504,14 @@ class Connection extends Emitter<ConnectionEvents> {
 		this.status = Status.Disconnected;
 		if (timeout) {
 			setTimeout(() => {
-				this.server.deleteConnection(
-					`${this.remoteInfo.address}:${this.remoteInfo.port}`,
-				);
+				this.server.deleteConnection(`${this.remoteInfo.address}:${this.remoteInfo.port}`);
 			}, 1000);
 		}
 	}
 
 	public getConnectionTime(type: "ms" | "s" | "min" = "ms"): number {
 		const time =
-			this.server.connectionTimes.get(
-				`${this.remoteInfo.address}:${this.remoteInfo.port}`,
-			) ?? 0;
+			this.server.connectionTimes.get(`${this.remoteInfo.address}:${this.remoteInfo.port}`) ?? 0;
 		if (type === "ms") return time;
 		if (type === "s") return time / 1000;
 		if (type === "min") return time / 60000;

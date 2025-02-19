@@ -213,41 +213,118 @@ export class Client extends Emitter<ClientEvents> {
 	}
 
 	public cleanup(): void {
-		if (this.status === Status.Disconnected) {
-			return;
-		}
+		if (this.status === Status.Disconnected) return;
 
-		Logger.info("[Client] Cleaning up connection and resources");
+		Logger.debug("[Client] Cleaning up connection and resources");
 		const wasConnected = this.status === Status.Connected;
 		this.status = Status.Disconnecting;
 
-		try {
-			if (wasConnected) {
-				const disconnect = new DisconnectionNotification();
-				this.send(disconnect.serialize());
-			}
+		this.remove("tick", () => this.framer?.tick());
 
-			this.removeAll();
-			this.socket.removeAllListeners();
-			this.socket.close();
-
-			if (this.tickTimer) {
-				clearInterval(this.tickTimer);
-				this.tickTimer = undefined;
-			}
-			if (this.connectionTimeout) {
-				clearTimeout(this.connectionTimeout);
-				this.connectionTimeout = undefined;
-			}
-			if (this.requestInterval) {
-				clearInterval(this.requestInterval);
-				this.requestInterval = undefined;
-			}
-		} catch (error) {
-			Logger.error("[Client] Error during cleanup", error as Error);
-		} finally {
-			this.status = Status.Disconnected;
-			Logger.info("[Client] Cleanup complete, status set to Disconnected");
+		if (this.tickTimer) {
+			clearInterval(this.tickTimer);
+			this.tickTimer = undefined;
 		}
+		if (this.connectionTimeout) {
+			clearTimeout(this.connectionTimeout);
+			this.connectionTimeout = undefined;
+		}
+		if (this.requestInterval) {
+			clearInterval(this.requestInterval);
+			this.requestInterval = undefined;
+		}
+
+		this.removeAll();
+		this.removeAllAfter();
+		this.removeAllBefore();
+		
+		if (this.socket) {
+			try {
+				this.socket.removeAllListeners();
+				Logger.cleanup();
+				if (wasConnected) {
+					const disconnect = new DisconnectionNotification();
+					this.socket.send(
+						disconnect.serialize(),
+						0,
+						disconnect.serialize().length,
+						this.options.port,
+						this.options.address
+					);
+				}
+
+				const state = (this.socket as any)[Symbol.for('state symbol')];
+				if (state?.handle) {
+					state.handle.close();
+					state.handle = null;
+				}
+				
+				this.socket.close(() => {
+					console.log("socket closed");	
+					this.socket.removeAllListeners();
+				});
+				
+				delete (this.socket as any)._handle;
+			} catch (err) {
+				Logger.error("[Client] Error during socket cleanup", err as Error);
+				try {
+					const state = (this.socket as any)[Symbol.for('state symbol')];
+					if (state?.handle) {
+						state.handle.close();
+						state.handle = null;
+					}
+				} catch (_) {}
+				this.socket = undefined as any;
+			}
+		}
+
+		if (this.framer) {
+			delete (this.framer as any)._events;
+			delete (this.framer as any)._eventsCount;
+			this.framer = undefined as any;
+		}
+
+		this.serverAddress = undefined as any;
+		delete (this as any)._events;
+		delete (this as any)._eventsCount;
+		this.status = Status.Disconnected;
+
+		Logger.debug("[Client] Cleanup complete");
+		Logger.cleanup();
+	}
+
+	public disconnect(): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			if (this.status === Status.Disconnected) {
+				resolve();
+				return;
+			}
+
+			const cleanupTimeout = setTimeout(() => {
+				Logger.warn("[Client] Disconnect timeout reached, forcing cleanup");
+				try {
+					this.cleanup();
+					resolve();
+				} catch (error) {
+					reject(error);
+				}
+			}, 5000);
+
+			try {
+				setImmediate(() => {
+					try {
+						this.cleanup();
+						clearTimeout(cleanupTimeout);
+						resolve();
+					} catch (error) {
+						clearTimeout(cleanupTimeout);
+						reject(error);
+					}
+				});
+			} catch (error) {
+				clearTimeout(cleanupTimeout);
+				reject(error);
+			}
+		});
 	}
 }
