@@ -6,7 +6,6 @@ import {
 	NewIncomingConnection,
 	Packet,
 	Priority,
-	Reliability,
 	SystemAddress,
 	Nack,
 	Status,
@@ -23,7 +22,6 @@ import type { Client } from "./client";
 import { BinaryStream } from "@serenityjs/binarystream";
 import { ConnectionRequestAccepted } from "../proto/packets/connection-request-accepted";
 import type { RemoteInfo } from "node:dgram";
-import DisconnectionNotification from "../proto/packets/disconnect";
 
 interface QueuedFrame {
 	frame: Frame;
@@ -58,9 +56,10 @@ export class Framer {
 	public _tickCount = 0;
 
 	private mtuDiff: number;
-
+	private readonly BATCH_SIZE = 32; // Maximum frames to process in a batch
+	private readonly MAX_BATCH_INTERVAL = 50; // Maximum time (ms) to wait before processing a batch
+	private lastBatchTime = 0;
 	private readonly ORDERING_QUEUE_TIMEOUT = 500;
-	private readonly FRAGMENT_TIMEOUT = 5000;
 
 	constructor(client: Client) {
 		this.client = client;
@@ -73,103 +72,99 @@ export class Framer {
 
 	public tick() {
 		this._tickCount++;
+		const now = Date.now();
+
 		if (
 			this.client.status === Status.Disconnected ||
 			this.client.status === Status.Disconnecting
 		) {
-			if (this.client.options.debug) {
-				Logger.debug(
-					`[Framer] Skipping tick - client status: ${Status[this.client.status]}`,
-				);
-			}
 			return;
 		}
 
 		// Send a ping every 50 ticks.
 		if (this._tickCount % 50 === 0) {
-			const now = Date.now();
 			const ping = new ConnectedPing();
 			ping.timestamp = BigInt(now);
 			this.frameAndSend(ping.serialize(), Priority.Immediate);
 		}
 
-		// Process ACKs.
+		// Batch process ACKs and NACKs
+		this.processBatchedAcksAndNacks();
+
+		// Process ordered frames in batches
+		this.processBatchedOrderedFrames(now);
+
+		// Send queued frames if we have enough or enough time has passed
+		if (
+			this.outputFrames.length >= this.BATCH_SIZE ||
+			(this.outputFrames.length > 0 &&
+				now - this.lastBatchTime >= this.MAX_BATCH_INTERVAL)
+		) {
+			this.sendQueue(this.outputFrames.length);
+			this.lastBatchTime = now;
+		}
+	}
+
+	private processBatchedAcksAndNacks(): void {
+		// Batch process ACKs
 		if (this.receivedFrameSequences.size > 0) {
 			const ackSeqs = Array.from(this.receivedFrameSequences);
 			this.receivedFrameSequences.clear();
-			if (this.client.options.debug) {
-				Logger.debug(`[Framer] Sending ACK for ${ackSeqs.length} sequences`);
-			}
 			const ack = new Ack();
 			ack.sequences = ackSeqs;
 			this.client.send(ack.serialize());
 		}
 
-		// Process NACKs.
+		// Batch process NACKs
 		if (this.lostFrameSequences.size > 0) {
 			const nackSeqs = Array.from(this.lostFrameSequences);
 			this.lostFrameSequences.clear();
-			if (this.client.options.debug) {
-				Logger.debug(`[Framer] Sending NACK for ${nackSeqs.length} sequences`);
-			}
 			const nack = new Nack();
 			nack.sequences = nackSeqs;
 			this.client.send(nack.serialize());
 		}
+	}
 
-		const now = Date.now();
+	private processBatchedOrderedFrames(now: number): void {
+		const processedChannels = new Set<number>();
+
 		for (let channel = 0; channel < this.inputOrderingQueue.length; channel++) {
+			if (processedChannels.has(channel)) continue;
+
 			const queue = this.inputOrderingQueue[channel];
+			let processed = 0;
 			let expected = this.inputOrderIndex[channel];
-			if (queue.has(expected)) {
-				// biome-ignore lint/style/noNonNullAssertion: <explanation>
-				const queued = queue.get(expected)!;
+
+			while (queue.has(expected) && processed < this.BATCH_SIZE) {
+				const queued = queue.get(expected);
+				if (!queued) {
+					expected++;
+					continue;
+				}
 				if (now - queued.timestamp > this.ORDERING_QUEUE_TIMEOUT) {
-					Logger.warn(
-						`[Framer] Timeout waiting for ordered frame ${expected} on channel ${channel}; skipping it`,
-					);
 					this.processFrame(queued.frame);
 					queue.delete(expected);
 					expected++;
-					this.inputOrderIndex[channel] = expected;
+					processed++;
+				} else {
+					break;
 				}
 			}
-		}
 
-		for (const [splitId, entry] of this.fragmentsQueue.entries()) {
-			if (now - entry.timestamp > this.FRAGMENT_TIMEOUT) {
-				Logger.warn(
-					`[Framer] Timeout reassembling fragments for splitId=${splitId}; discarding incomplete fragments`,
-				);
-				this.fragmentsQueue.delete(splitId);
+			if (processed > 0) {
+				this.inputOrderIndex[channel] = expected;
+				processedChannels.add(channel);
 			}
 		}
-
-		if (this.client.options.debug) {
-			Logger.debug(
-				`[Framer] Queue state - Frames: ${this.outputFrames.length}, Backup: ${this.outputBackup.size}`,
-			);
-		}
-		this.sendQueue(this.outputFrames.length);
 	}
 
 	public incommingMessage(payload: Buffer, rinfo: RemoteInfo) {
 		let header = payload.readUint8();
 		if ((header & 0xf0) === 0x80) header = 0x80;
-		if (this.client.options.debug) {
-			Logger.debug(
-				`[Framer] Received packet ${header} from ${rinfo.address}:${rinfo.port}`,
-			);
-		}
 
 		switch (header) {
 			case Packet.Ack: {
 				const ack = new Ack(payload).deserialize();
-				if (this.client.options.debug) {
-					Logger.debug(
-						`[Framer] Processing ACK with ${ack.sequences.length} sequences`,
-					);
-				}
 				for (let i = 0, len = ack.sequences.length; i < len; i++) {
 					this.outputBackup.delete(ack.sequences[i]);
 				}
@@ -177,19 +172,9 @@ export class Framer {
 			}
 			case Packet.Nack: {
 				const nack = new Nack(payload).deserialize();
-				if (this.client.options.debug) {
-					Logger.debug(
-						`[Framer] Processing NACK with ${nack.sequences.length} sequences`,
-					);
-				}
 				for (let i = 0, len = nack.sequences.length; i < len; i++) {
 					const seq = nack.sequences[i];
 					const lostFrames = this.outputBackup.get(seq) || [];
-					if (this.client.options.debug) {
-						Logger.debug(
-							`[Framer] Resending ${lostFrames.length} lost frames for sequence ${seq}`,
-						);
-					}
 					for (let j = 0, lostLen = lostFrames.length; j < lostLen; j++) {
 						this.sendFrame(lostFrames[j], Priority.Immediate);
 					}
@@ -221,7 +206,6 @@ export class Framer {
 				const packet = new OpenConnectionReplyTwo(payload).deserialize();
 				this.client.emit("open-connection-reply-two", packet);
 				this.client.options.mtuSize = packet.mtu;
-				// this.mtuDiff = this.client.options.mtuSize - 36;
 				const conReq = new ConnectionRequest();
 				conReq.clientGuid = this.client.options.clientId;
 				conReq.timestamp = BigInt(Date.now());
@@ -360,11 +344,16 @@ export class Framer {
 
 			this.lastInputSequence = frameSet.sequence;
 
-			for (let i = 0, len = frameSet.frames.length; i < len; i++) {
-				try {
-					this.handleFrame(frameSet.frames[i]);
-				} catch (err) {
-					Logger.error("[Framer] Error handling frame", err as Error);
+			// Process frames in batches
+			const frames = frameSet.frames;
+			for (let i = 0; i < frames.length; i += this.BATCH_SIZE) {
+				const batch = frames.slice(i, i + this.BATCH_SIZE);
+				for (const frame of batch) {
+					try {
+						this.handleFrame(frame);
+					} catch (err) {
+						Logger.error("[Framer] Error handling frame", err as Error);
+					}
 				}
 			}
 		} catch (err) {
@@ -373,12 +362,6 @@ export class Framer {
 	}
 
 	private handleFrame(frame: Frame): void {
-		if (this.client.options.debug) {
-			Logger.debug(
-				`[Framer] Handling frame - Split: ${frame.isSplit}, Sequenced: ${frame.isSequenced}, Ordered: ${frame.isOrdered}`,
-			);
-		}
-
 		if (frame.isSplit) {
 			this.handleSplit(frame);
 		} else if (frame.isSequenced) {
@@ -397,17 +380,10 @@ export class Framer {
 		if (frame.orderedFrameIndex === expectedOrderIndex) {
 			this.processOrderedFrames(frame);
 		} else if (frame.orderedFrameIndex > expectedOrderIndex) {
-			if (this.client.options.debug) {
-				Logger.debug(`Queuing out-of-order frame: ${frame.orderedFrameIndex}`);
-			}
 			this.inputOrderingQueue[channel].set(frame.orderedFrameIndex, {
 				frame,
 				timestamp: Date.now(),
 			});
-		} else {
-			if (this.client.options.debug) {
-				Logger.debug(`Discarding old frame: ${frame.orderedFrameIndex}`);
-			}
 		}
 	}
 
@@ -420,8 +396,11 @@ export class Framer {
 		const queue = this.inputOrderingQueue[channel];
 		let nextOrderIndex = this.inputOrderIndex[channel];
 		while (queue.has(nextOrderIndex)) {
-			// biome-ignore lint/style/noNonNullAssertion: <explanation>
-			const queued = queue.get(nextOrderIndex)!;
+			const queued = queue.get(nextOrderIndex);
+			if (!queued) {
+				nextOrderIndex++;
+				continue;
+			}
 			this.processFrame(queued.frame);
 			queue.delete(nextOrderIndex);
 			nextOrderIndex++;
@@ -432,21 +411,11 @@ export class Framer {
 	private handleSequenced(frame: Frame): void {
 		const channel = frame.orderChannel;
 		const currentHighestSequence = this.inputHighestSequenceIndex[channel];
-		if (this.client.options.debug) {
-			Logger.debug(
-				`Handling sequenced frame: sequenceFrameIndex=${frame.sequenceFrameIndex}, currentHighest=${currentHighestSequence}`,
-			);
-		}
 
 		if (
 			frame.sequenceFrameIndex < currentHighestSequence ||
 			frame.orderedFrameIndex === this.inputOrderIndex[channel]
 		) {
-			if (this.client.options.debug) {
-				Logger.debug(
-					`Discarding old sequenced frame: ${frame.sequenceFrameIndex}`,
-				);
-			}
 			return;
 		}
 
@@ -465,6 +434,7 @@ export class Framer {
 
 		if (entry.fragments.size === frame.splitCount) {
 			this.reassembleAndProcessFragment(frame, entry.fragments);
+			this.fragmentsQueue.delete(splitId);
 		}
 	}
 
@@ -475,14 +445,13 @@ export class Framer {
 		const stream = new BinaryStream();
 		for (let index = 0; index < frame.splitCount; index++) {
 			const sframe = fragment.get(index);
-			if (sframe) {
-				stream.writeBuffer(sframe.payload);
-			} else {
+			if (!sframe) {
 				Logger.error(
 					`Missing fragment at index ${index} for splitId=${frame.splitId}`,
 				);
 				return;
 			}
+			stream.writeBuffer(sframe.payload);
 		}
 
 		const reassembledFrame = new Frame();
@@ -493,7 +462,6 @@ export class Framer {
 		reassembledFrame.orderChannel = frame.orderChannel;
 		reassembledFrame.payload = stream.getBuffer();
 
-		this.fragmentsQueue.delete(frame.splitId);
 		this.handleFrame(reassembledFrame);
 	}
 
@@ -564,8 +532,12 @@ export class Framer {
 		const frameLength = frame.getByteLength();
 		const totalLength = 4 + this.outputFramesByteLength + frameLength;
 
-		if (totalLength > this.mtuDiff) {
+		if (
+			totalLength > this.mtuDiff ||
+			this.outputFrames.length >= this.BATCH_SIZE
+		) {
 			this.sendQueue(this.outputFrames.length);
+			this.lastBatchTime = Date.now();
 		}
 
 		this.outputFrames.push(frame);
@@ -573,37 +545,37 @@ export class Framer {
 
 		if (priority === Priority.Immediate) {
 			this.sendQueue(1);
+			this.lastBatchTime = Date.now();
 		}
 	}
 
 	public sendQueue(amount: number): void {
 		if (this.outputFrames.length === 0) return;
 
-		if (this.client.options.debug) {
-			Logger.debug(
-				`[Framer] Sending queue with ${amount} frames, total queued: ${this.outputFrames.length}`,
-			);
-		}
-
 		const frameset = new Frameset();
 		frameset.sequence = this.outputSequence++;
-		const framesToSend = this.outputFrames.splice(0, amount);
-		frameset.frames = framesToSend;
 
-		const sentLength = framesToSend.reduce(
-			(sum, f) => sum + f.getByteLength(),
-			0,
-		);
-		this.outputFramesByteLength -= sentLength;
+		// Send in batches if amount is larger than batch size
+		const remainingFrames = [...this.outputFrames];
+		this.outputFrames = [];
 
-		this.outputBackup.set(frameset.sequence, framesToSend);
+		while (remainingFrames.length > 0) {
+			const batchSize = Math.min(this.BATCH_SIZE, remainingFrames.length);
+			const framesToSend = remainingFrames.splice(0, batchSize);
 
-		if (this.client.options.debug) {
-			Logger.debug(
-				`[Framer] Frameset sequence: ${frameset.sequence}, remaining in queue: ${this.outputFrames.length}`,
+			frameset.frames = framesToSend;
+			const sentLength = framesToSend.reduce(
+				(sum, f) => sum + f.getByteLength(),
+				0,
 			);
-		}
+			this.outputFramesByteLength -= sentLength;
+			this.outputBackup.set(frameset.sequence, framesToSend);
+			this.client.send(frameset.serialize());
 
-		this.client.send(frameset.serialize());
+			// Increment sequence for next batch if there are more frames
+			if (remainingFrames.length > 0) {
+				frameset.sequence = this.outputSequence++;
+			}
+		}
 	}
 }
