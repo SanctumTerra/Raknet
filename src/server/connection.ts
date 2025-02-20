@@ -292,7 +292,6 @@ class Connection extends Emitter<ConnectionEvents> {
 			)
 				this.lostFrameSequences.add(index);
 		}
-		console.log(this.lastInputSequence, frameset.sequence);
 
 		this.lastInputSequence = sequence;
 
