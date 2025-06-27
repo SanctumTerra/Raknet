@@ -23,6 +23,13 @@ import { BinaryStream } from "@serenityjs/binarystream";
 import { ConnectionRequestAccepted } from "../proto/packets/connection-request-accepted";
 import type { RemoteInfo } from "node:dgram";
 
+// Constants for packet handling
+const PACKET_HEADER_MASK = 0xf0;
+const PACKET_HEADER_FRAMESET = 0x80;
+const PACKET_ENCAPSULATED = 0xfe;
+const PING_INTERVAL = 50; // Send ping every 50 ticks
+const MTU_HEADER_SIZE = 36;
+
 interface QueuedFrame {
 	frame: Frame;
 	timestamp: number;
@@ -67,7 +74,7 @@ export class Framer {
 		this.outputFrameQueue.frames = [];
 		this.outputOrderIndex = new Array(32).fill(0);
 		this.outputSequenceIndex = new Array(32).fill(0);
-		this.mtuDiff = this.client.options.mtuSize - 36;
+		this.mtuDiff = this.client.options.mtuSize - MTU_HEADER_SIZE;
 	}
 
 	public tick() {
@@ -81,8 +88,8 @@ export class Framer {
 			return;
 		}
 
-		// Send a ping every 50 ticks.
-		if (this._tickCount % 50 === 0) {
+		// Send a ping every PING_INTERVAL ticks
+		if (this._tickCount % PING_INTERVAL === 0) {
 			const ping = new ConnectedPing();
 			ping.timestamp = BigInt(now);
 			this.frameAndSend(ping.serialize(), Priority.Immediate);
@@ -158,9 +165,9 @@ export class Framer {
 		}
 	}
 
-	public incommingMessage(payload: Buffer, rinfo: RemoteInfo) {
+	public incomingMessage(payload: Buffer, rinfo: RemoteInfo) {
 		let header = payload.readUint8();
-		if ((header & 0xf0) === 0x80) header = 0x80;
+		if ((header & PACKET_HEADER_MASK) === PACKET_HEADER_FRAMESET) header = PACKET_HEADER_FRAMESET;
 
 		switch (header) {
 			case Packet.Ack: {
@@ -214,7 +221,7 @@ export class Framer {
 				this.frameAndSend(conReq.serialize(), Priority.Immediate);
 				break;
 			}
-			case Packet.FrameSet: {
+			case PACKET_HEADER_FRAMESET: {
 				const frameset = new Frameset(payload).deserialize();
 				this.client.emit("frameset", frameset);
 				this.handle(frameset);
@@ -290,7 +297,7 @@ export class Framer {
 					this.client.emit("connected-pong", packet);
 					break;
 				}
-				case 0xfe: {
+				case PACKET_ENCAPSULATED: {
 					this.client.emit("encapsulated", frame.payload);
 					break;
 				}
@@ -325,12 +332,12 @@ export class Framer {
 			}
 
 			this.receivedFrameSequences.add(frameSet.sequence);
-			const diff = frameSet.sequence - this.lastInputSequence;
+			const sequenceGap = frameSet.sequence - this.lastInputSequence;
 
-			if (diff > 1) {
+			if (sequenceGap > 1) {
 				if (this.client.options.debug) {
 					Logger.debug(
-						`[Framer] Detected ${diff - 1} missing sequences between ${this.lastInputSequence} and ${frameSet.sequence}`,
+						`[Framer] Detected ${sequenceGap - 1} missing sequences between ${this.lastInputSequence} and ${frameSet.sequence}`,
 					);
 				}
 				for (
@@ -485,10 +492,12 @@ export class Framer {
 			this.outputSequenceIndex[channel] = 0;
 		}
 		const maxSize = this.mtuDiff;
-		const splitSize = Math.ceil(frame.payload.byteLength / maxSize);
-		if (frame.payload.byteLength > maxSize) {
+		const payloadSize = frame.payload.byteLength;
+		
+		if (payloadSize > maxSize) {
+			const splitSize = Math.ceil(payloadSize / maxSize);
 			const splitId = this.outputSplitIndex++ & 0xffff;
-			for (let index = 0; index < frame.payload.byteLength; index += maxSize) {
+			for (let index = 0; index < payloadSize; index += maxSize) {
 				const nframe = this.createSplitFrame(
 					frame,
 					index,

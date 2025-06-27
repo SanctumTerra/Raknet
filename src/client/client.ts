@@ -21,7 +21,7 @@ import { Logger } from "../utils";
 import { Frameset } from "../proto/packets/frameset";
 
 const TICK_INTERVAL = 50;
-const REQUEST_INTERVAL = 50;
+const REQUEST_INTERVAL = 500;
 
 export class Client extends Emitter<ClientEvents> {
 	public socket!: Socket | null;
@@ -50,7 +50,7 @@ export class Client extends Emitter<ClientEvents> {
 
 			this.socket.removeAllListeners();
 			this.socket.on("message", (payload, rinfo) => {
-				this.framer?.incommingMessage(payload, rinfo);
+				this.framer?.incomingMessage(payload, rinfo);
 			});
 
 			this.socket.on("error", (err) => {
@@ -100,7 +100,7 @@ export class Client extends Emitter<ClientEvents> {
 
 			return new Promise((resolve, reject) => {
 				let isResolved = false;
-				let shouldContinueSending = true;
+				let currentStage = "request-one"; // Track connection stage
 
 				const cleanup = () => {
 					if (this.connectionTimeout) {
@@ -117,37 +117,56 @@ export class Client extends Emitter<ClientEvents> {
 					}
 				};
 
+				// Setup connection timeout
 				this.connectionTimeout = setTimeout(() => {
 					cleanup();
 					reject(new Error("Connection timed out"));
 				}, this.options.timeout);
 
-				const request = new OpenConnectionRequestOne();
-				request.mtu = this.options.mtuSize;
-				request.protocol = this.options.protocolVersion;
+				// Prepare connection request one
+				const requestOne = new OpenConnectionRequestOne();
+				requestOne.mtu = this.options.mtuSize;
+				requestOne.protocol = this.options.protocolVersion;
 
-				this.once(
-					"open-connection-reply-two",
-					(packet: OpenConnectionReplyTwo) => {
-						const mtu = packet.mtu;
-						if (mtu > 400 && mtu < 1500) {
-							shouldContinueSending = false;
-						} else {
-							cleanup();
-							reject(new Error(`Invalid MTU size: ${mtu}`));
-						}
-					},
-				);
+				// Handle open-connection-reply-one event
+				this.once("open-connection-reply-one", () => {
+					currentStage = "request-two";
+					Logger.debug("[Client] Received OpenConnectionReplyOne, sending OpenConnectionRequestTwo");
+					
+					// Move to next connection stage
+					if (this.requestInterval) {
+						clearInterval(this.requestInterval);
+					}
+					
+					// Here we would send OpenConnectionRequestTwo
+					// The framer handles this transition
+				});
 
-				this.emit("open-connection-request-one", request);
-				this.send(request.serialize());
+				// Handle open-connection-reply-two event
+				this.once("open-connection-reply-two", (packet: OpenConnectionReplyTwo) => {
+					const mtu = packet.mtu;
+					if (mtu > 400 && mtu < 1500) {
+						currentStage = "completed";
+						Logger.debug(`[Client] Received OpenConnectionReplyTwo with MTU: ${mtu}`);
+					} else {
+						cleanup();
+						reject(new Error(`Invalid MTU size: ${mtu}`));
+					}
+				});
 
+				// Send initial request
+				this.emit("open-connection-request-one", requestOne);
+				this.send(requestOne.serialize());
+
+				// Set up interval to resend requests
 				this.requestInterval = setInterval(() => {
-					if (!isResolved && shouldContinueSending) {
-						this.send(request.serialize());
+					if (!isResolved && currentStage === "request-one") {
+						Logger.debug("[Client] Resending OpenConnectionRequestOne");
+						this.send(requestOne.serialize());
 					}
 				}, REQUEST_INTERVAL);
 
+				// Handle successful connection
 				this.once("new-incoming-connection", () => {
 					if (!isResolved) {
 						isResolved = true;
@@ -158,6 +177,7 @@ export class Client extends Emitter<ClientEvents> {
 					}
 				});
 
+				// Handle connection errors
 				this.once("error", (error) => {
 					cleanup();
 					reject(error);
@@ -248,7 +268,7 @@ export class Client extends Emitter<ClientEvents> {
 			}
 
 			this.socket.close(() => {
-				console.log("socket closed");
+				Logger.info("[Client] Socket closed");
 				this.socket?.removeAllListeners();
 			});
 
