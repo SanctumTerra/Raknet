@@ -245,7 +245,6 @@ export class Client extends Emitter<ClientEvents> {
 		if (!this.socket) return;
 		try {
 			this.socket.removeAllListeners();
-			Logger.cleanup();
 			if (this.status === Status.Connected) {
 				const disconnect = new DisconnectionNotification();
 				this.socket.send(
@@ -332,7 +331,6 @@ export class Client extends Emitter<ClientEvents> {
 		this.status = Status.Disconnected;
 
 		Logger.debug("[Client] Cleanup complete");
-		Logger.cleanup();
 	}
 
 	public disconnect(): Promise<void> {
