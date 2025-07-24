@@ -16,7 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@serenityjs/binarystream": "^2.6.6",
+    "@serenityjs/binarystream": "2.7.3",
     "@serenityjs/emitter": "^0.5.2",
     "@serenityjs/protocol": "^0.6.4",
     "reflect-metadata": "^0.2.2"
