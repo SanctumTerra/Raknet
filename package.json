@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.3.79",
+  "version": "1.3.80",
   "description": "",
   "main": "dist/index.js",
   "module": "commonjs",
@@ -9,8 +9,8 @@
     "watch": "tsc --watch",
     "format": "npx @biomejs/biome format ./src",
     "lint": "npx @biomejs/biome lint ./src",
-    "lint-write": "npx @biomejs/biome lint --write ./src",
-    "format-write": "npx @biomejs/biome format --write ./src"
+    "lint:write": "npx @biomejs/biome lint --write ./src",
+    "format:write": "npx @biomejs/biome format --write ./src"
   },
   "keywords": [],
   "author": "",

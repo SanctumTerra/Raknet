@@ -161,7 +161,8 @@ export class Framer {
 
 	public incomingMessage(payload: Buffer, rinfo: RemoteInfo) {
 		let header = payload.readUint8();
-		if ((header & PACKET_HEADER_MASK) === PACKET_HEADER_FRAMESET) header = PACKET_HEADER_FRAMESET;
+		if ((header & PACKET_HEADER_MASK) === PACKET_HEADER_FRAMESET)
+			header = PACKET_HEADER_FRAMESET;
 
 		switch (header) {
 			case Packet.Ack: {
@@ -247,7 +248,9 @@ export class Framer {
 					const newI = new NewIncomingConnection();
 					SystemAddress.count = 20;
 					if (!this.client.serverAddress) {
-						Logger.error("[Framer] Cannot create NewIncomingConnection: serverAddress is null");
+						Logger.error(
+							"[Framer] Cannot create NewIncomingConnection: serverAddress is null",
+						);
 						return;
 					}
 					newI.serverAddress = this.client.serverAddress;
@@ -259,7 +262,9 @@ export class Framer {
 					break;
 				}
 				case Packet.DisconnectionNotification: {
-					Logger.info("[Framer] Received disconnection notification while connecting");
+					Logger.info(
+						"[Framer] Received disconnection notification while connecting",
+					);
 					this.client.disconnect();
 					break;
 				}
@@ -278,7 +283,9 @@ export class Framer {
 				case Packet.ConnectedPong: {
 					const packet = new ConnectedPong(frame.payload).deserialize();
 					if (this.client.options.debug) {
-						Logger.debug(`[Framer] Received pong, latency: ${Date.now() - Number(packet.pingTime)}ms`);
+						Logger.debug(
+							`[Framer] Received pong, latency: ${Date.now() - Number(packet.pingTime)}ms`,
+						);
 					}
 					this.client.emit("connected-pong", packet);
 					break;
@@ -300,7 +307,9 @@ export class Framer {
 		try {
 			if (this.receivedFrameSequences.has(frameSet.sequence)) {
 				if (this.client.options.debug) {
-					Logger.debug(`[Framer] Received duplicate frameset ${frameSet.sequence}`);
+					Logger.debug(
+						`[Framer] Received duplicate frameset ${frameSet.sequence}`,
+					);
 				}
 				return;
 			}
@@ -308,7 +317,9 @@ export class Framer {
 
 			if (frameSet.sequence <= this.lastInputSequence) {
 				if (this.client.options.debug) {
-					Logger.debug(`[Framer] Received out of order frameset ${frameSet.sequence}!`);
+					Logger.debug(
+						`[Framer] Received out of order frameset ${frameSet.sequence}!`,
+					);
 				}
 				return;
 			}
@@ -318,9 +329,15 @@ export class Framer {
 
 			if (sequenceGap > 1) {
 				if (this.client.options.debug) {
-					Logger.debug(`[Framer] Detected ${sequenceGap - 1} missing sequences between ${this.lastInputSequence} and ${frameSet.sequence}`);
+					Logger.debug(
+						`[Framer] Detected ${sequenceGap - 1} missing sequences between ${this.lastInputSequence} and ${frameSet.sequence}`,
+					);
 				}
-				for (let index = this.lastInputSequence + 1; index < frameSet.sequence; index++) {
+				for (
+					let index = this.lastInputSequence + 1;
+					index < frameSet.sequence;
+					index++
+				) {
 					this.lostFrameSequences.add(index);
 				}
 			}
@@ -428,7 +445,9 @@ export class Framer {
 		for (let index = 0; index < frame.splitCount; index++) {
 			const sframe = fragment.get(index);
 			if (!sframe) {
-				Logger.error(`Missing fragment at index ${index} for splitId=${frame.splitId}`);
+				Logger.error(
+					`Missing fragment at index ${index} for splitId=${frame.splitId}`,
+				);
 				return;
 			}
 			stream.writeBuffer(sframe.payload);
@@ -544,7 +563,10 @@ export class Framer {
 			const framesToSend = remainingFrames.splice(0, batchSize);
 
 			frameset.frames = framesToSend;
-			const sentLength = framesToSend.reduce((sum, f) => sum + f.getByteLength(), 0);
+			const sentLength = framesToSend.reduce(
+				(sum, f) => sum + f.getByteLength(),
+				0,
+			);
 			this.outputFramesByteLength -= sentLength;
 			this.outputBackup.set(frameset.sequence, framesToSend);
 			this.client.send(frameset.serialize());

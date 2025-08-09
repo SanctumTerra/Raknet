@@ -15,7 +15,11 @@ import {
 import DisconnectionNotification from "../proto/packets/disconnect";
 import { Logger } from "../utils";
 import { Framer } from "./framer";
-import { ClientEvents, ClientOptions, defaultClientOptions } from "./types";
+import {
+	type ClientEvents,
+	type ClientOptions,
+	defaultClientOptions,
+} from "./types";
 
 const TICK_INTERVAL = 50;
 const REQUEST_INTERVAL = 500;
@@ -119,23 +123,30 @@ export class Client extends Emitter<ClientEvents> {
 
 			this.once("open-connection-reply-one", () => {
 				currentStage = 1;
-				Logger.debug("[Client] Received OpenConnectionReplyOne, sending OpenConnectionRequestTwo");
+				Logger.debug(
+					"[Client] Received OpenConnectionReplyOne, sending OpenConnectionRequestTwo",
+				);
 				if (this.requestInterval) clearInterval(this.requestInterval);
 			});
 
-			this.once("open-connection-reply-two", (packet: OpenConnectionReplyTwo) => {
-				const mtu = packet.mtu;
-				if (mtu < 400 || mtu > 1500) {
-					if (!isResolved) {
-						isResolved = true;
-						this.disconnect();
-						reject(new Error(`Invalid MTU size: ${mtu}`));
+			this.once(
+				"open-connection-reply-two",
+				(packet: OpenConnectionReplyTwo) => {
+					const mtu = packet.mtu;
+					if (mtu < 400 || mtu > 1500) {
+						if (!isResolved) {
+							isResolved = true;
+							this.disconnect();
+							reject(new Error(`Invalid MTU size: ${mtu}`));
+						}
+						return;
 					}
-					return;
-				}
-				currentStage = 2;
-				Logger.debug(`[Client] Received OpenConnectionReplyTwo with MTU: ${mtu}`);
-			});
+					currentStage = 2;
+					Logger.debug(
+						`[Client] Received OpenConnectionReplyTwo with MTU: ${mtu}`,
+					);
+				},
+			);
 
 			this.once("new-incoming-connection", () => {
 				if (!isResolved) {
@@ -239,7 +250,13 @@ export class Client extends Emitter<ClientEvents> {
 			if (this.socket) {
 				if (wasConnected) {
 					const disconnect = new DisconnectionNotification();
-					this.socket.send(disconnect.serialize(), 0, disconnect.serialize().length, this.options.port, this.options.address);
+					this.socket.send(
+						disconnect.serialize(),
+						0,
+						disconnect.serialize().length,
+						this.options.port,
+						this.options.address,
+					);
 				}
 				this.socket.close();
 				this.socket = null;
