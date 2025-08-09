@@ -14,10 +14,10 @@ const defaultClientOptions: ClientOptions = {
 	port: 19132,
 	protocolVersion: 11,
 	mtuSize: 1492,
-	clientId: BigInt(Math.floor(Math.random() * 1000000000000000000)),
+	clientId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)),
 	debug: false,
-	timeout: 5000,
+	timeout: 10000,
 	loggerDisabled: false,
 };
 
-export { type ClientOptions, defaultClientOptions };
+export { defaultClientOptions, type ClientOptions };

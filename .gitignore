@@ -4,4 +4,5 @@ dist/
 
 package-lock.json
 src/tests/client.ts
+src/tests/bds.ts
 .cursor

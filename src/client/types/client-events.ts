@@ -12,8 +12,8 @@ import type {
 	OpenConnectionRequestTwo,
 	UnconnectedPing,
 	UnconnectedPong,
-} from "../proto";
-import type { Frameset } from "../proto/packets/frameset";
+} from "../../proto";
+import type { Frameset } from "../../proto/packets/frameset";
 
 export interface ClientEvents {
 	"open-connection-reply-one": [OpenConnectionReplyOne];
@@ -32,6 +32,6 @@ export interface ClientEvents {
 	ack: [Ack];
 	error: [Error];
 	close: [];
-	connect: [Advertisement];
+	connect: [];
 	tick: [];
 }

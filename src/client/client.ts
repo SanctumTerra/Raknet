@@ -1,9 +1,6 @@
 import { Emitter } from "@serenityjs/emitter";
-import type { ClientEvents } from "./client-events";
-import { type RemoteInfo, type Socket, createSocket } from "node:dgram";
-import { Framer } from "./framer";
+import { createSocket, type Socket } from "node:dgram";
 import {
-	Ack,
 	type Address,
 	type Advertisement,
 	Frame,
@@ -16,9 +13,9 @@ import {
 	type UnconnectedPong,
 } from "../proto";
 import DisconnectionNotification from "../proto/packets/disconnect";
-import { type ClientOptions, defaultClientOptions } from "./client-options";
 import { Logger } from "../utils";
-import { Frameset } from "../proto/packets/frameset";
+import { Framer } from "./framer";
+import { ClientEvents, ClientOptions, defaultClientOptions } from "./types";
 
 const TICK_INTERVAL = 50;
 const REQUEST_INTERVAL = 500;
@@ -81,7 +78,7 @@ export class Client extends Emitter<ClientEvents> {
 		});
 	}
 
-	public async connect(): Promise<Advertisement> {
+	public async connect(): Promise<Advertisement | null> {
 		if (this.status === Status.Connecting) {
 			throw new Error("Connection attempt already in progress");
 		}
@@ -91,102 +88,86 @@ export class Client extends Emitter<ClientEvents> {
 
 		this.status = Status.Connecting;
 		this.initSocket();
-
 		this.tickTimer = setInterval(() => this.emit("tick"), TICK_INTERVAL);
 
-		try {
-			const advertisement = await this.ping();
-			if (!advertisement) throw new Error("Failed to get server advertisement");
+		let advertisement: Advertisement | null = null;
+		const pongHandler = (packet: UnconnectedPong) => {
+			advertisement = fromString(packet.message);
+		};
+		this.once("unconnected-pong", pongHandler);
 
-			return new Promise((resolve, reject) => {
-				let isResolved = false;
-				let currentStage = "request-one"; // Track connection stage
+		const ping = new UnconnectedPing();
+		ping.guid = this.options.clientId;
+		ping.clientTimestamp = BigInt(Date.now());
+		this.send(ping.serialize());
 
-				const cleanup = () => {
-					if (this.connectionTimeout) {
-						clearTimeout(this.connectionTimeout);
-						this.connectionTimeout = undefined;
-					}
-					if (this.requestInterval) {
-						clearInterval(this.requestInterval);
-						this.requestInterval = undefined;
-					}
-					if (!isResolved) {
-						Logger.error("Could not resolve connection.");
-						this.cleanup();
-					}
-				};
+		return new Promise((resolve, reject) => {
+			let isResolved = false;
+			let currentStage = 0; // 0: request-one, 1: request-two, 2: completed
 
-				// Setup connection timeout
-				this.connectionTimeout = setTimeout(() => {
-					cleanup();
+			this.connectionTimeout = setTimeout(() => {
+				if (!isResolved) {
+					isResolved = true;
+					this.disconnect();
 					reject(new Error("Connection timed out"));
-				}, this.options.timeout);
+				}
+			}, this.options.timeout);
 
-				// Prepare connection request one
-				const requestOne = new OpenConnectionRequestOne();
-				requestOne.mtu = this.options.mtuSize;
-				requestOne.protocol = this.options.protocolVersion;
+			const requestOne = new OpenConnectionRequestOne();
+			requestOne.mtu = this.options.mtuSize;
+			requestOne.protocol = this.options.protocolVersion;
 
-				// Handle open-connection-reply-one event
-				this.once("open-connection-reply-one", () => {
-					currentStage = "request-two";
-					Logger.debug("[Client] Received OpenConnectionReplyOne, sending OpenConnectionRequestTwo");
-					
-					// Move to next connection stage
-					if (this.requestInterval) {
-						clearInterval(this.requestInterval);
-					}
-					
-					// Here we would send OpenConnectionRequestTwo
-					// The framer handles this transition
-				});
+			this.once("open-connection-reply-one", () => {
+				currentStage = 1;
+				Logger.debug("[Client] Received OpenConnectionReplyOne, sending OpenConnectionRequestTwo");
+				if (this.requestInterval) clearInterval(this.requestInterval);
+			});
 
-				// Handle open-connection-reply-two event
-				this.once("open-connection-reply-two", (packet: OpenConnectionReplyTwo) => {
-					const mtu = packet.mtu;
-					if (mtu > 400 && mtu < 1500) {
-						currentStage = "completed";
-						Logger.debug(`[Client] Received OpenConnectionReplyTwo with MTU: ${mtu}`);
-					} else {
-						cleanup();
-						reject(new Error(`Invalid MTU size: ${mtu}`));
-					}
-				});
-
-				// Send initial request
-				this.emit("open-connection-request-one", requestOne);
-				this.send(requestOne.serialize());
-
-				// Set up interval to resend requests
-				this.requestInterval = setInterval(() => {
-					if (!isResolved && currentStage === "request-one") {
-						Logger.debug("[Client] Resending OpenConnectionRequestOne");
-						this.send(requestOne.serialize());
-					}
-				}, REQUEST_INTERVAL);
-
-				// Handle successful connection
-				this.once("new-incoming-connection", () => {
+			this.once("open-connection-reply-two", (packet: OpenConnectionReplyTwo) => {
+				const mtu = packet.mtu;
+				if (mtu < 400 || mtu > 1500) {
 					if (!isResolved) {
 						isResolved = true;
-						this.emit("connect", advertisement);
-						this.status = Status.Connected;
-						cleanup();
-						resolve(advertisement);
+						this.disconnect();
+						reject(new Error(`Invalid MTU size: ${mtu}`));
 					}
-				});
-
-				// Handle connection errors
-				this.once("error", (error) => {
-					cleanup();
-					reject(error);
-				});
+					return;
+				}
+				currentStage = 2;
+				Logger.debug(`[Client] Received OpenConnectionReplyTwo with MTU: ${mtu}`);
 			});
-		} catch (error) {
-			this.status = Status.Disconnected;
-			throw error;
-		}
+
+			this.once("new-incoming-connection", () => {
+				if (!isResolved) {
+					isResolved = true;
+					this.status = Status.Connected;
+					this.emit("connect");
+
+					if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
+					if (this.requestInterval) clearInterval(this.requestInterval);
+
+					resolve(advertisement);
+				}
+			});
+
+			this.once("error", (error) => {
+				if (!isResolved) {
+					isResolved = true;
+					this.disconnect();
+					reject(error);
+				}
+			});
+
+			this.emit("open-connection-request-one", requestOne);
+			this.send(requestOne.serialize());
+
+			this.requestInterval = setInterval(() => {
+				if (!isResolved && currentStage === 0) {
+					Logger.debug("[Client] Resending OpenConnectionRequestOne");
+					this.send(requestOne.serialize());
+				}
+			}, REQUEST_INTERVAL);
+		});
 	}
 
 	public sendFrame(frame: Frame, priority: Priority): void {
@@ -241,130 +222,31 @@ export class Client extends Emitter<ClientEvents> {
 		}
 	}
 
-	private cleanupSocket() {
-		if (!this.socket) return;
-		try {
-			this.socket.removeAllListeners();
-			if (this.status === Status.Connected) {
-				const disconnect = new DisconnectionNotification();
-				this.socket.send(
-					disconnect.serialize(),
-					0,
-					disconnect.serialize().length,
-					this.options.port,
-					this.options.address,
-				);
-			}
-
-			const stateSymbol = Symbol.for("state symbol");
-			const socketWithState = this.socket as unknown as {
-				[key: symbol]: { handle: { close: () => void } | null };
-			};
-			const state = socketWithState[stateSymbol];
-			if (state?.handle) {
-				state.handle.close();
-				state.handle = null;
-			}
-
-			this.socket.close(() => {
-				Logger.info("[Client] Socket closed");
-				this.socket?.removeAllListeners();
-			});
-
-			// (this.socket as { _handle?: unknown })._handle = undefined;
-		} catch (err) {
-			Logger.error("[Client] Error during socket cleanup", err as Error);
-			try {
-				const stateSymbol = Symbol.for("state symbol");
-				const socketWithState = this.socket as unknown as {
-					[key: symbol]: { handle: { close: () => void } | null };
-				};
-				const state = socketWithState[stateSymbol];
-				if (state?.handle) {
-					state.handle.close();
-					state.handle = null;
-				}
-			} catch (_) {}
-			this.socket = null;
-		}
-	}
-
-	private cleanupFramer() {
-		if (!this.framer) return;
-		(this.framer as { _events?: unknown })._events = undefined;
-		(this.framer as { _eventsCount?: unknown })._eventsCount = undefined;
-		this.framer = null;
-	}
-
-	public cleanup(): void {
-		if (this.status === Status.Disconnected) return;
-
-		Logger.debug("[Client] Cleaning up connection and resources");
-		const wasConnected = this.status === Status.Connected;
-		this.status = Status.Disconnecting;
-
-		this.remove("tick", () => this.framer?.tick());
-
-		if (this.tickTimer) {
-			clearInterval(this.tickTimer);
-			this.tickTimer = undefined;
-		}
-		if (this.connectionTimeout) {
-			clearTimeout(this.connectionTimeout);
-			this.connectionTimeout = undefined;
-		}
-		if (this.requestInterval) {
-			clearInterval(this.requestInterval);
-			this.requestInterval = undefined;
-		}
-
-		this.removeAll();
-		this.removeAllAfter();
-		this.removeAllBefore();
-
-		this.cleanupSocket();
-		this.cleanupFramer();
-
-		this.serverAddress = null;
-		(this as { _events?: unknown })._events = undefined;
-		(this as { _eventsCount?: unknown })._eventsCount = undefined;
-		this.status = Status.Disconnected;
-
-		Logger.debug("[Client] Cleanup complete");
-	}
-
 	public disconnect(): Promise<void> {
-		return new Promise<void>((resolve, reject) => {
+		return new Promise<void>((resolve) => {
 			if (this.status === Status.Disconnected) {
 				resolve();
 				return;
 			}
 
-			const cleanupTimeout = setTimeout(() => {
-				Logger.warn("[Client] Disconnect timeout reached, forcing cleanup");
-				try {
-					this.cleanup();
-					resolve();
-				} catch (error) {
-					reject(error);
-				}
-			}, 5000);
+			const wasConnected = this.status === Status.Connected;
+			this.status = Status.Disconnected;
 
-			try {
-				setImmediate(() => {
-					try {
-						this.cleanup();
-						clearTimeout(cleanupTimeout);
-						resolve();
-					} catch (error) {
-						clearTimeout(cleanupTimeout);
-						reject(error);
-					}
-				});
-			} catch (error) {
-				clearTimeout(cleanupTimeout);
-				reject(error);
+			if (this.tickTimer) clearInterval(this.tickTimer);
+			if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
+			if (this.requestInterval) clearInterval(this.requestInterval);
+
+			if (this.socket) {
+				if (wasConnected) {
+					const disconnect = new DisconnectionNotification();
+					this.socket.send(disconnect.serialize(), 0, disconnect.serialize().length, this.options.port, this.options.address);
+				}
+				this.socket.close();
+				this.socket = null;
 			}
+
+			this.framer = null;
+			resolve();
 		});
 	}
 }
