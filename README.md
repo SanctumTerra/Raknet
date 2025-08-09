@@ -41,6 +41,6 @@ server.start();
 		debug: false,
 	});
 	client.connect().then((ad) => {
-		console.log(ad);
+		if(ad) console.log(ad);
 	});
 ```
