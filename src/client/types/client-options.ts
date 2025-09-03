@@ -1,23 +1,23 @@
-type ClientOptions = {
+import { Uint64 } from "@serenityjs/binarystream";
+
+export type ClientOptions = {
+	mtu: number;
 	address: string;
 	port: number;
-	protocolVersion: number;
-	mtuSize: number;
-	clientId: bigint;
-	debug: boolean;
+	guid: bigint;
+	tickRate: number;
+	pingRate: number;
 	timeout: number;
-	loggerDisabled: boolean;
 };
+export const getRandomGuid = () =>
+	BigInt(Math.floor(Date.now() + Math.random() * 10000000));
 
-const defaultClientOptions: ClientOptions = {
+export const defaultClientOptions: ClientOptions = {
+	mtu: 1492,
 	address: "127.0.0.1",
 	port: 19132,
-	protocolVersion: 11,
-	mtuSize: 1492,
-	clientId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)),
-	debug: false,
-	timeout: 10000,
-	loggerDisabled: false,
+	guid: getRandomGuid(),
+	tickRate: 20,
+	pingRate: 40,
+	timeout: 30000,
 };
-
-export { defaultClientOptions, type ClientOptions };
