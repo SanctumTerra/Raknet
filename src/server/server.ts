@@ -1,223 +1,166 @@
-import Emitter from "@serenityjs/emitter";
-import type { ServerEvents } from "./server-events";
-import { type ServerOptions, defaultOptions } from "./server-options";
-import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 import {
+	Ack,
 	Address,
-	AdvertisementToString,
-	ConnectionRequest,
-	Flags,
-	Frameset,
-	IncompatibleProtocolVersion,
+	EventEmitter,
+	FrameSet,
+	Logger,
 	OpenConnectionReplyOne,
 	OpenConnectionReplyTwo,
-	OpenConnectionRequestOne,
 	OpenConnectionRequestTwo,
-	Packet,
-	UnconnectedPing,
+	Packets,
 	UnconnectedPong,
-} from "../proto";
-import { Logger } from "../utils";
+} from "../shared";
 import { Connection } from "./connection";
+import {
+	type Advertisement,
+	AdvertisementToString,
+	type RaknetServerEvents,
+	type RaknetServerOptions,
+	defaultRaknetServerOptions,
+} from "./types";
+import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 
-class Server extends Emitter<ServerEvents> {
-	public options: ServerOptions;
-	public connectionTimes: Map<string, number> = new Map();
+export class Server extends EventEmitter<RaknetServerEvents> {
 	private socket: Socket;
-	private connections: Map<string, Connection> = new Map();
-	private timer!: NodeJS.Timeout;
-	private tickCount = 0;
+	public readonly options: RaknetServerOptions;
+	public advertisement: Advertisement;
+	private connections: Map<string, Connection>;
+	private tickCount: number;
+	private tickInterval: NodeJS.Timeout;
 
-	private blockedConnections: Map<string, number> = new Map();
-	private packetsPerSecond: Map<string, number> = new Map();
-
-	private readonly validFlagsMask = Flags.Valid;
-
-	constructor(options: Partial<ServerOptions>) {
+	constructor(options: Partial<RaknetServerOptions> = {}) {
 		super();
-		this.options = { ...defaultOptions, ...options };
 		this.socket = createSocket("udp4");
-		Logger.disabled = this.options.loggerDisabled;
-	}
-
-	public async start() {
-		this.socket.bind(this.options.port, this.options.host);
-		this.socket.on("message", (message, remote) => {
-			this.handle(message, remote);
-		});
-
-		Logger.info(`Server started on ${this.options.host}:${this.options.port}`);
-		this.tick();
+		this.options = { ...defaultRaknetServerOptions, ...options };
+		this.connections = new Map();
+		this.advertisement = {
+			gamemode: "Survival",
+			guid: this.options.guid,
+			maxPlayers: this.options.maxConnections,
+			message: this.options.motd,
+			playerCount: this.connections.size,
+			version: "0",
+			protocol: 0,
+			serverName: "SanctumTerra Server",
+			type: "MCPE",
+		};
+		this.tickCount = 0;
+		this.tickInterval = setInterval(
+			this.tick.bind(this),
+			1000 / this.options.tickRate,
+		);
 	}
 
 	public tick() {
-		this.tickCount++;
 		for (const connection of this.connections.values()) {
-			connection.tick();
+			connection.onTick(this.tickCount);
 		}
-
-		const currentTime = Date.now();
-
-		// Check every 1s
-		if (this.tickCount % this.options.tickRate === 0) {
-			for (const [addr, blockTime] of this.blockedConnections) {
-				if (blockTime < currentTime) {
-					Logger.warn(`Unblocking ${addr} for excessive packets`);
-					this.blockedConnections.delete(addr);
-				}
-			}
-			this.packetsPerSecond.clear();
-		}
-
-		this.timer = setTimeout(() => this.tick(), 1000 / this.options.tickRate);
+		this.tickCount++;
 	}
 
-	public send(message: Buffer, remote: RemoteInfo) {
-		this.socket.send(message, 0, message.length, remote.port, remote.address);
+	public listen() {
+		this.socket.bind(this.options.port, this.options.address, () => {
+			this.emit("listening");
+			if (this.options.enableServerLogs) {
+				Logger.info(
+					`Server listening on ${this.options.address}:${this.options.port}`,
+				);
+			}
+		});
+		this.socket.on("message", this.onMessage.bind(this));
+		this.on("disconnect", this.onDisconnect.bind(this));
 	}
 
-	public async handle(message: Buffer, remote: RemoteInfo) {
-		let packetId = message[0];
-		if ((packetId & 0xf0) === 0x80) packetId = 0x80;
-		const remoteAddr = remote.address;
-		// console.log(`Message: ${message} from ${remoteAddr}`);
-		if (this.blockedConnections.has(remoteAddr)) {
-			return;
+	private onDisconnect(connection: Connection, executedByServer = false) {
+		const address = connection.getAddress();
+		this.connections.delete(`${address.address}:${address.port}`);
+		this.advertisement.playerCount = this.connections.size;
+		if (executedByServer) {
+			this.emit("disconnect", connection);
 		}
-
-		const currentPackets = (this.packetsPerSecond.get(remoteAddr) ?? 0) + 1;
-		this.packetsPerSecond.set(remoteAddr, currentPackets);
-
-		if (currentPackets > this.options.maxPacketsPerSecond) {
-			const blockUntil = Date.now() + this.options.blockTime;
-			this.blockedConnections.set(remoteAddr, blockUntil);
-			Logger.warn(
-				`Blocking ${remoteAddr} for ${this.options.blockTime}ms for excessive packets`,
-			);
-			return;
+		if (this.options.enableServerLogs) {
+			Logger.info(`Client disconnected ${address.address}:${address.port}`);
 		}
+	}
 
-		const connectionKey = `${remoteAddr}:${remote.port}`;
-		const connection = this.connections.get(connectionKey);
+	private onMessage(message: Buffer, rinfo: RemoteInfo) {
+		let id = message[0];
+		const isOnline = (id & 0xf0) === 0x80;
+		if (isOnline) id = 0x80;
 
-		if ((packetId & this.validFlagsMask) !== 0) {
-			if (connection) {
-				connection.handle(message);
-			}
-			return;
-		}
-
-		if ((packetId & this.validFlagsMask) === 0 && connection) {
-			Logger.debug(
-				`Received Offline packet from ${connectionKey} while being connected`,
-			);
-			return;
-		}
-
-		switch (packetId) {
-			case Packet.UnconnectedPing: {
-				const ping = new UnconnectedPing(message).deserialize();
+		switch (id) {
+			case Packets.UnconnectedPing: {
 				const pong = new UnconnectedPong();
-				pong.serverGuid = this.options.guid;
-				pong.serverTimestamp = BigInt(Date.now());
-				pong.message = AdvertisementToString({
-					type: "MCPE",
-					gamemode: "Survival",
-					maxPlayers: this.options.maxConnections,
-					playerCount: this.connections.size,
-					protocol: this.options.protocol,
-					serverName: this.options.levelName,
-					version: this.options.version,
-					serverGUID: Number(this.options.guid),
-					message: this.options.motd,
-				});
-				this.socket.send(pong.serialize(), remote.port, remote.address);
+				pong.guid = this.options.guid;
+				pong.message = AdvertisementToString(this.advertisement);
+				pong.timestamp = BigInt(Date.now());
+				this.send(pong.serialize(), rinfo.address, rinfo.port);
 				break;
 			}
-			case Packet.OpenConnectionRequestOne: {
-				if (!this.connectionTimes.has(`${remote.address}:${remote.port}`)) {
-					this.connectionTimes.set(
-						`${remote.address}:${remote.port}`,
-						Date.now(),
-					);
-				}
-
-				const request = new OpenConnectionRequestOne(message).deserialize();
-				Logger.debug(
-					`Received OpenConnectionRequestOne from ${remote.address}:${remote.port} with mtu ${request.mtu}`,
-				);
-				if (request.protocol !== this.options.protocol) {
-					Logger.warn(
-						`Client ${remote.address}:${remote.port} tried to connect with invalid protocol ${request.protocol}`,
-					);
-					const incompatible = new IncompatibleProtocolVersion();
-					incompatible.protocol = this.options.protocol;
-					incompatible.guid = this.options.guid;
-					this.socket.send(
-						incompatible.serialize(),
-						remote.port,
-						remote.address,
-					);
-					break;
-				}
-
-				Logger.debug(
-					`Sending OpenConnectionReplyOne to ${remote.address}:${remote.port} with mtu ${this.options.mtu}`,
-				);
+			case Packets.OpenConnectionRequest1: {
 				const reply = new OpenConnectionReplyOne();
+				reply.guid = this.options.guid;
 				reply.mtu = this.options.mtu;
-				reply.serverGuid = this.options.guid;
-				reply.serverHasSecurity = false;
-				this.socket.send(reply.serialize(), remote.port, remote.address);
+				reply.security = false;
+				this.send(reply.serialize(), rinfo.address, rinfo.port);
 				break;
 			}
-			case Packet.OpenConnectionRequestTwo: {
+			case Packets.OpenConnectionRequest2: {
 				const request = new OpenConnectionRequestTwo(message).deserialize();
-				Logger.debug(
-					`Received OpenConnectionRequestTwo from ${remote.address}:${remote.port} with mtu ${request.mtu}`,
-				);
 				const reply = new OpenConnectionReplyTwo();
-				reply.mtu = this.options.mtu;
-				reply.clientAddress = Address.fromIdentifier(remote);
+				reply.address = new Address("0.0.0.0", 0, 4);
 				reply.encryptionEnabled = false;
-				reply.serverGuid = this.options.guid;
-				this.socket.send(reply.serialize(), remote.port, remote.address);
+				reply.guid = this.options.guid;
+				reply.mtu = this.options.mtu;
 				const connection = new Connection(
 					this,
-					remote,
-					request.clientGuid,
+					rinfo,
 					request.mtu,
+					request.guid,
 				);
-				this.connections.set(`${remote.address}:${remote.port}`, connection);
+				this.connections.set(`${rinfo.address}:${rinfo.port}`, connection);
+				this.send(reply.serialize(), rinfo.address, rinfo.port);
+				break;
+			}
+			case Packets.FrameSet: {
+				const frameSet = new FrameSet(message).deserialize();
+				const connection = this.connections.get(
+					`${rinfo.address}:${rinfo.port}`,
+				);
+				if (!connection) {
+					break;
+				}
+				connection.onFrameSet(frameSet);
+				break;
+			}
+			case Packets.Ack: {
+				const connection = this.connections.get(
+					`${rinfo.address}:${rinfo.port}`,
+				);
+				if (!connection) {
+					break;
+				}
+				connection.onAck(new Ack(message).deserialize());
+				break;
+			}
+			case Packets.Nack: {
+				const connection = this.connections.get(
+					`${rinfo.address}:${rinfo.port}`,
+				);
+				if (!connection) {
+					break;
+				}
+				connection.onNack(new Ack(message).deserialize());
 				break;
 			}
 			default: {
-				// 0x80 is FrameSet with no connection so we must ignore it
-				if (packetId === 0x80) return;
-				Logger.info(`Received unknown packet: ${packetId}`);
+				Logger.warn(`Unknown packet type ${id}`);
+				break;
 			}
 		}
 	}
 
-	public deleteConnection(address: string) {
-		const connection = this.connections.get(address);
-		if (connection) {
-			this.emit("closeConnection", connection);
-		}
-		this.connections.delete(address);
-		this.connectionTimes.delete(address);
-	}
-
-	public close() {
-		clearTimeout(this.timer);
-		for (const connection of this.connections.values()) {
-			connection.disconnect();
-		}
-		// just wait for all connections to disconnect
-		setTimeout(() => {
-			this.socket.close();
-		}, 200);
+	public send(buffer: Buffer, address: string, port: number) {
+		this.socket.send(buffer, port, address);
 	}
 }
-
-export { Server };
