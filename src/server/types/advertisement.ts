@@ -13,6 +13,12 @@ interface Advertisement {
 }
 
 function fromString(message: string): Advertisement {
+	const parts = message.split(";");
+	if (parts.length < 9) {
+		throw new Error(
+			`Invalid advertisement string: expected >=9 fields, got ${parts.length}`,
+		);
+	}
 	const [
 		type,
 		motd,
@@ -21,16 +27,16 @@ function fromString(message: string): Advertisement {
 		players,
 		maxPlayers,
 		guid,
-		serverName,
 		gamemode,
-	] = message.split(";");
+		serverName,
+	] = parts;
 	return {
 		type: type as AdvertisementType,
 		serverName,
-		protocol: Number.parseInt(protocol),
+		protocol: Number.parseInt(protocol, 10),
 		version,
-		playerCount: Number.parseInt(players),
-		maxPlayers: Number.parseInt(maxPlayers),
+		playerCount: Number.parseInt(players, 10),
+		maxPlayers: Number.parseInt(maxPlayers, 10),
 		guid: BigInt(guid),
 		message: motd,
 		gamemode,

@@ -1,4 +1,4 @@
-enum Reliability {
+export enum Reliability {
 	Unreliable = 0,
 	UnreliableSequenced = 1,
 	Reliable = 2,
@@ -8,5 +8,3 @@ enum Reliability {
 	ReliableWithAckReceipt = 6,
 	ReliableOrderedWithAckReceipt = 7,
 }
-
-export { Reliability };

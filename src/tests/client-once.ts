@@ -1,6 +1,6 @@
 import { Client } from "../client";
 
-const client = new Client({});
+const client = new Client();
 
 client.on("unconnectedPong", (packet) => {
 	console.log(packet);
