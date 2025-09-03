@@ -12,6 +12,15 @@ interface Advertisement {
 	gamemode: string;
 }
 
+/**
+ * Parses a semicolon-delimited advertisement string into an Advertisement object.
+ *
+ * The input must contain nine semicolon-separated fields in this order:
+ * `type;motd;protocol;version;players;maxPlayers;guid;serverName;gamemode`.
+ *
+ * @param message - The raw advertisement string in the format above.
+ * @returns The parsed Advertisement with `guid` converted to `bigint` and numeric fields parsed.
+ */
 function fromString(message: string): Advertisement {
 	const [
 		type,
@@ -37,6 +46,16 @@ function fromString(message: string): Advertisement {
 	};
 }
 
+/**
+ * Serialize an Advertisement into the semicolon-delimited wire format.
+ *
+ * The output is a single string with fields in this exact order:
+ * `type;message;protocol;version;playerCount;maxPlayers;guid;gamemode;serverName`.
+ * The `guid` bigint is converted to a JavaScript number representation before serialization.
+ *
+ * @param advertisement - Advertisement object to serialize
+ * @returns The advertisement encoded as a semicolon-delimited string
+ */
 function AdvertisementToString(advertisement: Advertisement): string {
 	return [
 		advertisement.type,

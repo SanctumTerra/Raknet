@@ -1,6 +1,17 @@
 import { Client } from "../client";
 import { Logger } from "../shared/logger";
 
+/**
+ * Run a connection-time benchmark by performing a number of Client connection attempts.
+ *
+ * Performs `iterations` sequential connection attempts, measures the time from initiating
+ * Client.connect() to the Client's "connect" event for each attempt, logs each measurement,
+ * and logs the list of times and their average at the end.
+ *
+ * If a connect event never occurs for an attempt, that iteration will await indefinitely.
+ *
+ * @param iterations - Number of sequential connection attempts to perform (should be a positive integer)
+ */
 async function runBenchmark(iterations: number): Promise<void> {
 	Logger.info(
 		`§bStarting connection benchmark for ${iterations} iterations...§r`,
