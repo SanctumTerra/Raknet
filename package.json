@@ -1,6 +1,6 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "",
   
   "types": "dist/index.d.ts",
@@ -22,7 +22,6 @@
   "license": "ISC",
 
   "dependencies": {
-    "@sanctumterra/raknet": ".",
     "@serenityjs/binarystream": "^3.0.10"
   },
   "devDependencies": {
