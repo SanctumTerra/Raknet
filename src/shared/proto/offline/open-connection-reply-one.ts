@@ -20,8 +20,8 @@ export class OpenConnectionReplyOne extends BinaryStream {
 		Magic.write(this);
 		Int64.write(this, this.guid);
 		Bool.write(this, this.security);
-		if(this.security && this.cookie != null){
-			Int32.write(this,this.cookie);
+		if (this.security && this.cookie != null) {
+			Int32.write(this, this.cookie);
 		}
 		Int16.write(this, this.mtu);
 		return this.getBuffer();
@@ -33,7 +33,7 @@ export class OpenConnectionReplyOne extends BinaryStream {
 		this.guid = Int64.read(this);
 		this.security = Bool.read(this);
 		this.cookie = null;
-		if(this.security){
+		if (this.security) {
 			this.cookie = Int32.read(this);
 		}
 		this.mtu = Int16.read(this);

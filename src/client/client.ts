@@ -29,12 +29,16 @@ import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 import { Logger } from "../shared";
 
 export class Client extends EventEmitter<ClientEvents> {
+	private static readonly MTU_VALUES = [1492, 1400, 1200, 576];
+	private static readonly MTU_RETRY_INTERVAL = 500;
+
 	public options: ClientOptions;
 	private socket: Socket;
 	private interval: NodeJS.Timeout | null;
 	private status: ConnectionStatus;
 	public tick: number;
 	private session: NetworkSession;
+	private gotReply1 = false;
 
 	constructor(options: Partial<ClientOptions> = {}) {
 		super();
@@ -58,18 +62,45 @@ export class Client extends EventEmitter<ClientEvents> {
 	public connect(): Promise<void> {
 		return new Promise((resolve, reject) => {
 			this.status = ConnectionStatus.Connecting;
-			const request = new OpenConnectionRequestOne();
-			request.mtu = this.options.mtu;
-			request.protocol = 11; // Only 11 is supported
-			const serialized = request.serialize();
-			this.send(serialized);
+			this.gotReply1 = false;
+			let mtuIndex = 0;
+			let retryTimeout: NodeJS.Timeout | null = null;
+
+			const sendRequest = () => {
+				if (mtuIndex >= Client.MTU_VALUES.length) {
+					reject(new Error("Connection timed out, all MTU values exhausted"));
+					return;
+				}
+
+				const mtu = Client.MTU_VALUES[mtuIndex];
+				// Should not happen but for the linter sake
+				if (!mtu) throw new Error("MTU value is undefined");
+
+				const request = new OpenConnectionRequestOne();
+				request.mtu = mtu;
+				request.protocol = 11;
+				this.send(request.serialize());
+
+				retryTimeout = setTimeout(() => {
+					if (!this.gotReply1) {
+						mtuIndex++;
+						sendRequest();
+					}
+				}, Client.MTU_RETRY_INTERVAL);
+			};
+
 			const timeout = setTimeout(() => {
+				if (retryTimeout) clearTimeout(retryTimeout);
 				reject(new Error("Connection timed out"));
 			}, this.options.timeout);
+
 			this.once("connect", () => {
 				clearTimeout(timeout);
+				if (retryTimeout) clearTimeout(retryTimeout);
 				resolve();
 			});
+
+			sendRequest();
 		});
 	}
 
@@ -97,6 +128,7 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.OpenConnectionReply1: {
+				this.gotReply1 = true;
 				const reply = new OpenConnectionReplyOne(data).deserialize();
 				const request = new OpenConnectionRequestTwo();
 				request.address = Address.fromIdentifier(rinfo);
