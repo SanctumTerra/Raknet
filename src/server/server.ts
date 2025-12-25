@@ -90,7 +90,6 @@ export class Server extends EventEmitter<RaknetServerEvents> {
 
 		switch (id) {
 			case Packets.UnconnectedPing: {
-				console.log("Received Ping! from: ", rinfo.address);
 				const pong = new UnconnectedPong();
 				pong.guid = this.options.guid;
 				pong.message = AdvertisementToString(this.advertisement);
