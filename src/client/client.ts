@@ -102,6 +102,7 @@ export class Client extends EventEmitter<ClientEvents> {
 				request.address = Address.fromIdentifier(rinfo);
 				request.mtu = reply.mtu;
 				request.guid = this.options.guid;
+				request.cookie = reply.cookie;
 				this.send(request.serialize());
 				break;
 			}

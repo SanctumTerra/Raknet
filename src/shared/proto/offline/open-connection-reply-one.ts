@@ -2,6 +2,7 @@ import {
 	BinaryStream,
 	Bool,
 	Int16,
+	Int32,
 	Int64,
 	Uint8,
 } from "@serenityjs/binarystream";
@@ -11,6 +12,7 @@ import { Magic, MTU } from "../types";
 export class OpenConnectionReplyOne extends BinaryStream {
 	public guid!: bigint;
 	public security!: boolean;
+	public cookie!: number | null;
 	public mtu!: number;
 
 	public serialize(): Buffer {
@@ -18,6 +20,9 @@ export class OpenConnectionReplyOne extends BinaryStream {
 		Magic.write(this);
 		Int64.write(this, this.guid);
 		Bool.write(this, this.security);
+		if(this.security && this.cookie != null){
+			Int32.write(this,this.cookie);
+		}
 		Int16.write(this, this.mtu);
 		return this.getBuffer();
 	}
@@ -27,6 +32,10 @@ export class OpenConnectionReplyOne extends BinaryStream {
 		Magic.read(this);
 		this.guid = Int64.read(this);
 		this.security = Bool.read(this);
+		this.cookie = null;
+		if(this.security){
+			this.cookie = Int32.read(this);
+		}
 		this.mtu = Int16.read(this);
 		return this;
 	}
