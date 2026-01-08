@@ -1,4 +1,10 @@
-import { BinaryStream, Bool, Endianness, Int64, Uint8 } from "@serenityjs/binarystream";
+import {
+	BinaryStream,
+	Bool,
+	Endianness,
+	Int64,
+	Uint8,
+} from "@serenityjs/binarystream";
 import { Packets } from "../enums";
 import { Magic } from "../types";
 
@@ -25,7 +31,7 @@ export class OpenConnectionReplyOne extends BinaryStream {
 	public deserialize(): OpenConnectionReplyOne {
 		Uint8.read(this);
 		Magic.read(this);
-		this.guid = this.readInt64(Endianness.Little)
+		this.guid = this.readInt64(Endianness.Little);
 		this.security = Bool.read(this);
 		this.cookie = null;
 		this.hasCookie = false;
