@@ -135,6 +135,8 @@ export class Client extends EventEmitter<ClientEvents> {
 				request.mtu = reply.mtu;
 				request.guid = this.options.guid;
 				request.cookie = reply.cookie;
+				// Set to false since we don't support libcat encryption
+				request.clientSupportsecurity = false;
 				this.send(request.serialize());
 				break;
 			}
