@@ -1,5 +1,12 @@
 import { Uint64 } from "@serenityjs/binarystream";
 
+export type ProxyOptions = {
+	host: string;
+	port: number;
+	userId?: string;
+	password?: string;
+};
+
 export type ClientOptions = {
 	mtu: number;
 	address: string;
@@ -8,6 +15,7 @@ export type ClientOptions = {
 	tickRate: number;
 	pingRate: number;
 	timeout: number;
+	proxy?: ProxyOptions;
 };
 export const getRandomGuid = () =>
 	BigInt(Math.floor(Date.now() + Math.random() * 10000000));

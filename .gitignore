@@ -9,3 +9,5 @@ src/tests/bds.ts
 
 # Bun lockfile
 bun.lock
+
+src/tests/socks5.ts

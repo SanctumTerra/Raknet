@@ -1,13 +1,10 @@
 {
   "name": "@sanctumterra/raknet",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "",
-  
   "types": "dist/index.d.ts",
   "main": "dist/index.js",
-  
   "module": "commonjs",
-  
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
@@ -16,18 +13,16 @@
     "lint:write": "npx @biomejs/biome lint --write ./src",
     "format:write": "npx @biomejs/biome format --write ./src"
   },
-  
   "keywords": [],
   "author": "",
   "license": "ISC",
-
   "dependencies": {
     "@serenityjs/binarystream": "^3.0.10"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.21",
-    "typescript": "^5.9.2",
     "@biomejs/biome": "^1.9.4",
-    "@types/node": "^24.3.0"
+    "@types/bun": "^1.2.21",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
   }
 }
