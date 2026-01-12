@@ -343,7 +343,9 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.OpenConnectionReply2: {
-				new OpenConnectionReplyTwo(actualData).deserialize();
+				const reply2 = new OpenConnectionReplyTwo(actualData).deserialize();
+				// Update session MTU with the negotiated value from server
+				this.session.mtu = reply2.mtu;
 				const request = new ConnectionRequest();
 				request.guid = this.options.guid;
 				request.timestamp = BigInt(Date.now());

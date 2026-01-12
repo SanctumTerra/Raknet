@@ -69,15 +69,21 @@ export class NetworkSession {
 	onNack(nack: Ack) {
 		for (let i = 0, len = nack.sequences.length; i < len; i++) {
 			const seq = nack.sequences[i];
-			const lostFrames = this.outputBackup.get(seq) || [];
-			for (let j = 0, lostLen = lostFrames.length; j < lostLen; j++) {
-				this.sendFrame(lostFrames[j], Priority.High);
-			}
+			const lostFrames = this.outputBackup.get(seq);
+			if (!lostFrames || lostFrames.length === 0) continue;
+
+			// Resend the exact same frameset with the same sequence number
+			const frameset = new FrameSet();
+			frameset.sequence = seq;
+			frameset.frames = lostFrames;
+			const buffer = frameset.serialize();
+			this.send(buffer);
 		}
 	}
 
 	public frameAndSend(data: Buffer, priority: Priority = Priority.Medium) {
 		const frame = new Frame();
+		frame.reliability = Reliability.ReliableOrdered;
 		frame.orderChannel = 0;
 		frame.payload = data;
 		this.sendFrame(frame, priority);
