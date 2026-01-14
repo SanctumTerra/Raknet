@@ -16,7 +16,7 @@ import {
 	AdvertisementToString,
 	type RaknetServerEvents,
 	type RaknetServerOptions,
-	defaultRaknetServerOptions,
+	createDefaultServerOptions,
 } from "./types";
 import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 
@@ -31,7 +31,7 @@ export class Server extends EventEmitter<RaknetServerEvents> {
 	constructor(options: Partial<RaknetServerOptions> = {}) {
 		super();
 		this.socket = createSocket("udp4");
-		this.options = { ...defaultRaknetServerOptions, ...options };
+		this.options = { ...createDefaultServerOptions(), ...options };
 		this.connections = new Map();
 		this.advertisement = {
 			gamemode: "Survival",

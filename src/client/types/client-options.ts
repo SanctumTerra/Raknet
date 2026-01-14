@@ -1,5 +1,3 @@
-import { Uint64 } from "@serenityjs/binarystream";
-
 export type ProxyOptions = {
 	host: string;
 	port: number;
@@ -17,15 +15,16 @@ export type ClientOptions = {
 	timeout: number;
 	proxy?: ProxyOptions;
 };
-export const getRandomGuid = () =>
+
+export const generateGuid = (): bigint =>
 	BigInt(Math.floor(Date.now() + Math.random() * 10000000));
 
-export const defaultClientOptions: ClientOptions = {
+export const createDefaultClientOptions = (): ClientOptions => ({
 	mtu: 1492,
 	address: "127.0.0.1",
 	port: 19132,
-	guid: getRandomGuid(),
+	guid: generateGuid(),
 	tickRate: 20,
 	pingRate: 40,
 	timeout: 30000,
-};
+});

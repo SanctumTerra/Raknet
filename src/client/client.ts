@@ -24,7 +24,7 @@ import {
 import type { ClientEvents } from "./types";
 import {
 	type ClientOptions,
-	defaultClientOptions,
+	createDefaultClientOptions,
 } from "./types/client-options";
 import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 import { Logger } from "../shared";
@@ -56,7 +56,7 @@ export class Client extends EventEmitter<ClientEvents> {
 
 	constructor(options: Partial<ClientOptions> = {}) {
 		super();
-		this.options = { ...defaultClientOptions, ...options };
+		this.options = { ...createDefaultClientOptions(), ...options };
 		this.status = ConnectionStatus.Disconnected;
 		this.tick = 0;
 		this.socket = createSocket("udp4");

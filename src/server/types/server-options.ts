@@ -1,4 +1,4 @@
-import { getRandomGuid } from "../../client";
+import { generateGuid } from "../../client";
 
 export type RaknetServerOptions = {
 	port: number;
@@ -11,13 +11,13 @@ export type RaknetServerOptions = {
 	enableServerLogs: boolean;
 };
 
-export const defaultRaknetServerOptions: RaknetServerOptions = {
+export const createDefaultServerOptions = (): RaknetServerOptions => ({
 	port: 19132,
 	address: "0.0.0.0",
-	guid: getRandomGuid(),
+	guid: generateGuid(),
 	motd: "SanctumTerra",
 	maxConnections: 100,
 	tickRate: 20,
 	mtu: 1492,
 	enableServerLogs: true,
-};
+});
