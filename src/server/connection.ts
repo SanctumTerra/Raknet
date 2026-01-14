@@ -5,6 +5,7 @@ import {
 	ConnectedPong,
 	ConnectionRequest,
 	ConnectionRequestAccepted,
+	DisconnectMessage,
 	EventEmitter,
 	type Frame,
 	type FrameSet,
@@ -18,7 +19,12 @@ import type { RemoteInfo } from "node:dgram";
 import type { ConnectionEvents } from "./types";
 
 export class Connection extends EventEmitter<ConnectionEvents> {
+	private static readonly STALE_TIMEOUT_MS = 10000; // 10 seconds without activity = stale
+	private static readonly PING_INTERVAL_TICKS = 100; // Send ping every ~2 seconds at 50 tick rate
+
 	private session: NetworkSession;
+	private lastActivityTime: number = Date.now();
+	private isDisconnected = false;
 
 	constructor(
 		private server: Server,
@@ -33,10 +39,43 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 	}
 
 	public onTick(tick: number) {
+		if (this.isDisconnected) return;
+
+		// Check for stale connection
+		const timeSinceLastActivity = Date.now() - this.lastActivityTime;
+		if (timeSinceLastActivity > Connection.STALE_TIMEOUT_MS) {
+			this.disconnect("Connection timed out (stale)");
+			return;
+		}
+
+		// Send connected ping periodically
+		if (tick % Connection.PING_INTERVAL_TICKS === 0) {
+			const ping = new ConnectedPing();
+			ping.timestamp = BigInt(Date.now());
+			this.session.frameAndSend(ping.serialize(), Priority.High);
+		}
+
 		this.session.onTick(tick);
 	}
 
+	public disconnect(reason = "Disconnected"): void {
+		if (this.isDisconnected) return;
+		this.isDisconnected = true;
+
+		// Send disconnect packet to client
+		const disconnect = new DisconnectMessage();
+		this.session.frameAndSend(disconnect.serialize(), Priority.High);
+
+		// Emit disconnect event
+		this.server.emit("disconnect", this);
+	}
+
+	public isStale(): boolean {
+		return this.isDisconnected;
+	}
+
 	public onFrameSet(frameSet: FrameSet) {
+		this.lastActivityTime = Date.now();
 		this.session.onFrameSet(frameSet);
 	}
 
@@ -45,6 +84,7 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 	}
 
 	public onMessage(data: Buffer) {
+		this.lastActivityTime = Date.now();
 		const id = data[0];
 
 		switch (id) {
@@ -75,6 +115,7 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 				break;
 			}
 			case Packets.Disconnect: {
+				this.isDisconnected = true;
 				this.server.emit("disconnect", this);
 				break;
 			}
@@ -84,6 +125,10 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 				pong.pingTimestamp = ping.timestamp;
 				pong.pongTimestamp = BigInt(Date.now());
 				this.session.frameAndSend(pong.serialize(), Priority.High);
+				break;
+			}
+			case Packets.ConnectedPong: {
+				// Pong received, activity time already updated above
 				break;
 			}
 			case 254: {

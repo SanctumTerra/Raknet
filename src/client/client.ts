@@ -19,6 +19,7 @@ import {
 	ConnectedPing,
 	ConnectedPong,
 	Ack,
+	DisconnectMessage,
 } from "../shared";
 import type { ClientEvents } from "./types";
 import {
@@ -33,6 +34,8 @@ import { lookup } from "node:dns/promises";
 export class Client extends EventEmitter<ClientEvents> {
 	private static readonly MTU_VALUES = [1492, 1400, 1028, 1200, 576];
 	private static readonly MTU_RETRY_INTERVAL = 500;
+	private static readonly STALE_TIMEOUT_MS = 10000; // 10 seconds without pong = stale
+	private static readonly PING_INTERVAL_TICKS = 100; // Send connected ping every ~2 seconds at 50 tick rate
 
 	public options: ClientOptions;
 	private socket: Socket;
@@ -47,6 +50,9 @@ export class Client extends EventEmitter<ClientEvents> {
 	private proxyRelayPort: number | null = null;
 	private resolvedAddress: string | null = null;
 	private proxyReady = false;
+
+	private lastPongTime: number = Date.now();
+	private isDisconnected = false;
 
 	constructor(options: Partial<ClientOptions> = {}) {
 		super();
@@ -301,13 +307,60 @@ export class Client extends EventEmitter<ClientEvents> {
 	public onTick(): void {
 		const isDisconnected = this.status === ConnectionStatus.Disconnected;
 		const isDisconnecting = this.status === ConnectionStatus.Disconnecting;
+		const isConnected = this.status === ConnectionStatus.Connected;
 
 		const canPing = isDisconnected && this.tick % this.options.pingRate === 0;
 		if (canPing && (!this.options.proxy || this.proxyReady)) this.ping();
+
+		// Send connected pings and check for stale connection when connected
+		if (isConnected) {
+			// Send connected ping periodically
+			if (this.tick % Client.PING_INTERVAL_TICKS === 0) {
+				this.sendConnectedPing();
+			}
+
+			// Check for stale connection
+			const timeSinceLastPong = Date.now() - this.lastPongTime;
+			if (timeSinceLastPong > Client.STALE_TIMEOUT_MS) {
+				this.handleDisconnect("Connection timed out (stale)");
+				return;
+			}
+		}
+
 		if (!isDisconnecting || !isDisconnected) {
 			this.session.onTick(this.tick);
 		}
 		this.tick++;
+	}
+
+	private sendConnectedPing(): void {
+		const ping = new ConnectedPing();
+		ping.timestamp = BigInt(Date.now());
+		this.frameAndSend(ping.serialize(), Priority.High);
+	}
+
+	private handleDisconnect(reason: string): void {
+		if (this.isDisconnected) return;
+		this.isDisconnected = true;
+		this.status = ConnectionStatus.Disconnected;
+		this.emit("disconnect", reason);
+		this.cleanup();
+	}
+
+	private cleanup(): void {
+		if (this.interval) {
+			clearInterval(this.interval);
+			this.interval = null;
+		}
+		try {
+			this.socket.close();
+		} catch {
+			// Socket may already be closed
+		}
+		if (this.proxySocket) {
+			this.proxySocket.destroy();
+			this.proxySocket = null;
+		}
 	}
 
 	public onMessage(data: Buffer, rinfo: RemoteInfo): void {
@@ -383,6 +436,7 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.ConnectedPong: {
+				this.lastPongTime = Date.now();
 				break;
 			}
 			case Packets.ConnectedPing: {
@@ -390,7 +444,11 @@ export class Client extends EventEmitter<ClientEvents> {
 				const pong = new ConnectedPong();
 				pong.pingTimestamp = ping.timestamp;
 				pong.pongTimestamp = BigInt(Date.now());
-				this.frameAndSend(ping.serialize(), Priority.High);
+				this.frameAndSend(pong.serialize(), Priority.High);
+				break;
+			}
+			case Packets.Disconnect: {
+				this.handleDisconnect("Server disconnected");
 				break;
 			}
 			case Packets.ConnectionRequestAccepted: {
@@ -405,6 +463,8 @@ export class Client extends EventEmitter<ClientEvents> {
 				nic.incomingTimestamp = BigInt(Date.now());
 				nic.serverTimestamp = accepted.timestamp;
 				this.frameAndSend(nic.serialize(), Priority.High);
+				this.status = ConnectionStatus.Connected;
+				this.lastPongTime = Date.now(); // Reset stale timer on connect
 				this.emit("connect");
 				break;
 			}
@@ -442,11 +502,14 @@ export class Client extends EventEmitter<ClientEvents> {
 	}
 
 	public disconnect(): void {
-		this.socket.close();
-		if (this.proxySocket) {
-			this.proxySocket.destroy();
-			this.proxySocket = null;
+		if (this.isDisconnected) return;
+
+		// Send disconnect packet to server if connected
+		if (this.status === ConnectionStatus.Connected) {
+			const disconnect = new DisconnectMessage();
+			this.frameAndSend(disconnect.serialize(), Priority.High);
 		}
-		if (this.interval) clearInterval(this.interval);
+
+		this.handleDisconnect("Client disconnected");
 	}
 }
