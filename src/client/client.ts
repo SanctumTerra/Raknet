@@ -328,7 +328,7 @@ export class Client extends EventEmitter<ClientEvents> {
 		}
 
 		if (!isDisconnecting || !isDisconnected) {
-			this.session.onTick(this.tick);
+			this.session.onTick();
 		}
 		this.tick++;
 	}
@@ -406,8 +406,15 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.FrameSet: {
-				const frameSet = new FrameSet(actualData).deserialize();
-				this.session.onFrameSet(frameSet);
+				try {
+					const frameSet = new FrameSet(actualData).deserialize();
+					this.session.onFrameSet(frameSet);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : "Unknown error";
+					Logger.error(`Frame set error: ${message}`);
+					this.handleDisconnect(`Frame set error: ${message}`);
+				}
 				break;
 			}
 			case Packets.Ack: {

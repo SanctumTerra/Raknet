@@ -37,7 +37,7 @@ export class NetworkSession {
 			this.inputOrderingQueue.set(index, new Map());
 	}
 
-	onTick(tick: number) {
+	onTick() {
 		if (this.receivedFrameSequences.size > 0) {
 			const ackSeqs = Array.from(this.receivedFrameSequences);
 			this.receivedFrameSequences.clear();
@@ -167,6 +167,7 @@ export class NetworkSession {
 		if (this.receivedFrameSequences.has(frameSet.sequence)) {
 			throw new Error("Duplicate frame set received");
 		}
+
 		this.lostFrameSequences.delete(frameSet.sequence);
 		const isLess = frameSet.sequence < this.lastInputSequence;
 		const isEqual = frameSet.sequence === this.lastInputSequence;
@@ -174,6 +175,7 @@ export class NetworkSession {
 		if (isLess || isEqual) {
 			throw new Error("Frame set received is out of order");
 		}
+
 		this.receivedFrameSequences.add(frameSet.sequence);
 		const diff = frameSet.sequence - this.lastInputSequence;
 

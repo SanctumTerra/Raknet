@@ -55,7 +55,7 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 			this.session.frameAndSend(ping.serialize(), Priority.High);
 		}
 
-		this.session.onTick(tick);
+		this.session.onTick();
 	}
 
 	public disconnect(reason = "Disconnected"): void {
@@ -76,7 +76,13 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 
 	public onFrameSet(frameSet: FrameSet) {
 		this.lastActivityTime = Date.now();
-		this.session.onFrameSet(frameSet);
+		try {
+			this.session.onFrameSet(frameSet);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			Logger.error(`Frame set error: ${message}`);
+			this.disconnect(`Frame set error: ${message}`);
+		}
 	}
 
 	public getAddress(): RemoteInfo {
