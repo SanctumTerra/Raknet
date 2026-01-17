@@ -5,7 +5,7 @@ export class ConnectedPing extends BinaryStream {
 	public timestamp!: bigint; // Int64
 
 	public serialize(): Buffer {
-		Uint8.write(this, Packets.ConnectedPong);
+		Uint8.write(this, Packets.ConnectedPing);
 		Int64.write(this, this.timestamp);
 		return this.getBuffer();
 	}

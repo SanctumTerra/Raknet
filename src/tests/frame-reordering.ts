@@ -1,4 +1,10 @@
-import { NetworkSession, FrameSet, Frame, Reliability, Logger } from "../shared";
+import {
+	NetworkSession,
+	FrameSet,
+	Frame,
+	Reliability,
+	Logger,
+} from "../shared";
 
 // Enable debug logging to see the reordering in action
 Logger.debugEnabled = true;
@@ -13,17 +19,21 @@ session.handle = (data: Buffer) => {
 };
 
 // Create test frame sets with out-of-order sequences
-function createTestFrameSet(sequence: number, orderedIndex: number, message: string): FrameSet {
+function createTestFrameSet(
+	sequence: number,
+	orderedIndex: number,
+	message: string,
+): FrameSet {
 	const frameSet = new FrameSet();
 	frameSet.sequence = sequence;
-	
+
 	const frame = new Frame();
 	frame.reliability = Reliability.ReliableOrdered;
 	frame.orderChannel = 0;
 	frame.orderedFrameIndex = orderedIndex; // Set the ordered index
 	frame.reliableFrameIndex = sequence; // Set reliable index
 	frame.payload = Buffer.from(message);
-	
+
 	frameSet.frames = [frame];
 	return frameSet;
 }
