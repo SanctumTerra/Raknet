@@ -67,7 +67,7 @@ export class Client extends EventEmitter<ClientEvents> {
 			1000 / this.options.tickRate,
 		);
 		this.socket.on("message", this.onMessage.bind(this));
-		this.session = new NetworkSession(this.options.mtu);
+		this.session = new NetworkSession(this.options.mtu, this.options.debug);
 		this.session.send = this.send.bind(this);
 		this.session.handle = (data: Buffer) => {
 			this.handleOnline(data);

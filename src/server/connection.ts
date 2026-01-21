@@ -33,7 +33,10 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 		private guid: bigint,
 	) {
 		super();
-		this.session = new NetworkSession(this.mtu);
+		this.session = new NetworkSession(
+			this.mtu,
+			this.server.options.enableServerLogs,
+		);
 		this.session.send = this.send.bind(this);
 		this.session.handle = this.onMessage.bind(this);
 	}

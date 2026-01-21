@@ -14,6 +14,7 @@ export type ClientOptions = {
 	pingRate: number;
 	timeout: number;
 	proxy?: ProxyOptions;
+	debug: boolean;
 };
 
 export const generateGuid = (): bigint =>
@@ -27,4 +28,5 @@ export const createDefaultClientOptions = (): ClientOptions => ({
 	tickRate: 20,
 	pingRate: 40,
 	timeout: 30000,
+	debug: false,
 });

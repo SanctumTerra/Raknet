@@ -6,6 +6,7 @@ const MTU_HEADER_SIZE = 36;
 
 export class NetworkSession {
 	public mtu: number;
+	public debug: boolean;
 	public send!: (data: Buffer) => void;
 	public handle!: (data: Buffer) => void;
 
@@ -40,8 +41,9 @@ export class NetworkSession {
 	private static readonly FRAGMENT_TIMEOUT_MS = 30000;
 	private static readonly ORDER_QUEUE_MAX_SIZE = 256;
 
-	constructor(mtu: number) {
+	constructor(mtu: number, debug = false) {
 		this.mtu = mtu;
+		this.debug = debug;
 		this.outputOrderIndex = new Array(32).fill(0);
 		this.outputSequenceIndex = new Array(32).fill(0);
 		this.inputHighestSequenceIndex = Array.from<number>({ length: 32 }).fill(0);
@@ -75,9 +77,10 @@ export class NetworkSession {
 
 		for (const [splitId, entry] of this.fragmentsQueue) {
 			if (now - entry.timestamp > NetworkSession.FRAGMENT_TIMEOUT_MS) {
-				Logger.warn(
-					`Fragment queue ${splitId} timed out, dropping ${entry.frames.size} fragments`,
-				);
+				if (this.debug)
+					Logger.warn(
+						`Fragment queue ${splitId} timed out, dropping ${entry.frames.size} fragments`,
+					);
 				this.fragmentsQueue.delete(splitId);
 			}
 		}
@@ -210,9 +213,10 @@ export class NetworkSession {
 	public onFrameSet(frameSet: FrameSet) {
 		// Already received this exact sequence so ignore duplicate
 		if (this.receivedFrameSequences.has(frameSet.sequence)) {
-			Logger.warn(
-				`Duplicate frame set received: sequence ${frameSet.sequence}`,
-			);
+			if (this.debug)
+				Logger.warn(
+					`Duplicate frame set received: sequence ${frameSet.sequence}`,
+				);
 			return;
 		}
 
@@ -244,9 +248,10 @@ export class NetworkSession {
 			this.lastInputSequence = frameSet.sequence;
 		} else {
 			// zOut-of-order packet (arrived late but still valid)
-			Logger.warn(
-				`Out-of-order frame set received: sequence ${frameSet.sequence} (expected > ${this.lastInputSequence})`,
-			);
+			if (this.debug)
+				Logger.warn(
+					`Out-of-order frame set received: sequence ${frameSet.sequence} (expected > ${this.lastInputSequence})`,
+				);
 		}
 
 		// Process all frames
@@ -292,9 +297,10 @@ export class NetworkSession {
 			for (let index = 0; index < frame.splitSize; index++) {
 				const sframe = entry.frames.get(index);
 				if (!sframe) {
-					Logger.warn(
-						`Missing fragment at index ${index} for splitId=${frame.splitId}`,
-					);
+					if (this.debug)
+						Logger.warn(
+							`Missing fragment at index ${index} for splitId=${frame.splitId}`,
+						);
 					this.fragmentsQueue.delete(splitId);
 					return;
 				}
@@ -368,9 +374,10 @@ export class NetworkSession {
 				if (outOfOrderQueue.size < NetworkSession.ORDER_QUEUE_MAX_SIZE) {
 					outOfOrderQueue.set(frame.orderedFrameIndex, frame);
 				} else {
-					Logger.warn(
-						`Order queue for channel ${channel} is full, dropping frame ${frame.orderedFrameIndex}`,
-					);
+					if (this.debug)
+						Logger.debug(
+							`Order queue for channel ${channel} is full, dropping frame ${frame.orderedFrameIndex}`,
+						);
 				}
 			}
 		}
