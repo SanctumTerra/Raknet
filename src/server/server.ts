@@ -71,15 +71,17 @@ export class Server extends EventEmitter<RaknetServerEvents> {
 		this.on("disconnect", this.onDisconnect.bind(this));
 	}
 
-	private onDisconnect(connection: Connection, executedByServer = false) {
+	private onDisconnect({
+		connection,
+		reason,
+	}: { connection: Connection; reason: string }) {
 		const address = connection.getAddress();
 		this.connections.delete(`${address.address}:${address.port}`);
 		this.advertisement.playerCount = this.connections.size;
-		if (executedByServer) {
-			this.emit("disconnect", connection);
-		}
 		if (this.options.enableServerLogs) {
-			Logger.info(`Client disconnected ${address.address}:${address.port}`);
+			Logger.info(
+				`Client disconnected ${address.address}:${address.port} - ${reason}`,
+			);
 		}
 	}
 

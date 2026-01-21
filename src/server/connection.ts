@@ -66,8 +66,8 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 		const disconnect = new DisconnectMessage();
 		this.session.frameAndSend(disconnect.serialize(), Priority.High);
 
-		// Emit disconnect event
-		this.server.emit("disconnect", this);
+		// Emit disconnect event with reason
+		this.server.emit("disconnect", { connection: this, reason });
 	}
 
 	public isStale(): boolean {
@@ -76,13 +76,7 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 
 	public onFrameSet(frameSet: FrameSet) {
 		this.lastActivityTime = Date.now();
-		try {
-			this.session.onFrameSet(frameSet);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : "Unknown error";
-			Logger.error(`Frame set error: ${message}`);
-			this.disconnect(`Frame set error: ${message}`);
-		}
+		this.session.onFrameSet(frameSet);
 	}
 
 	public getAddress(): RemoteInfo {
@@ -122,7 +116,10 @@ export class Connection extends EventEmitter<ConnectionEvents> {
 			}
 			case Packets.Disconnect: {
 				this.isDisconnected = true;
-				this.server.emit("disconnect", this);
+				this.server.emit("disconnect", {
+					connection: this,
+					reason: "Client disconnected",
+				});
 				break;
 			}
 			case Packets.ConnectedPing: {

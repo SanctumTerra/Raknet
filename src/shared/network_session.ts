@@ -21,11 +21,24 @@ export class NetworkSession {
 	// Input
 	public receivedFrameSequences: Set<number> = new Set();
 	public lostFrameSequences: Set<number> = new Set();
+	public pendingAcks: Set<number> = new Set();
 	public lastInputSequence = -1;
-	public fragmentsQueue: Map<number, Map<number, Frame>> = new Map();
+	public fragmentsQueue: Map<
+		number,
+		{ frames: Map<number, Frame>; timestamp: number }
+	> = new Map();
 	public inputHighestSequenceIndex: Array<number>;
 	public inputOrderIndex: Array<number>;
 	protected inputOrderingQueue: Map<number, Map<number, Frame>> = new Map();
+
+	private receivedReliableFrameIndices: Set<number> = new Set();
+	private highestReliableIndex = -1;
+
+	// goofy ahh geyser stuff
+	private static readonly RECEIVE_WINDOW_SIZE = 2048;
+	private static readonly RELIABLE_WINDOW_SIZE = 4096;
+	private static readonly FRAGMENT_TIMEOUT_MS = 30000;
+	private static readonly ORDER_QUEUE_MAX_SIZE = 256;
 
 	constructor(mtu: number) {
 		this.mtu = mtu;
@@ -37,10 +50,41 @@ export class NetworkSession {
 			this.inputOrderingQueue.set(index, new Map());
 	}
 
-	onTick() {
-		if (this.receivedFrameSequences.size > 0) {
-			const ackSeqs = Array.from(this.receivedFrameSequences);
-			this.receivedFrameSequences.clear();
+	onTick(_tick?: number) {
+		const now = Date.now();
+
+		const windowStart =
+			this.lastInputSequence - NetworkSession.RECEIVE_WINDOW_SIZE;
+		if (windowStart > 0) {
+			for (const seq of this.receivedFrameSequences) {
+				if (seq < windowStart) this.receivedFrameSequences.delete(seq);
+			}
+			for (const seq of this.lostFrameSequences) {
+				if (seq < windowStart) this.lostFrameSequences.delete(seq);
+			}
+		}
+
+		const reliableWindowStart =
+			this.highestReliableIndex - NetworkSession.RELIABLE_WINDOW_SIZE;
+		if (reliableWindowStart > 0) {
+			for (const idx of this.receivedReliableFrameIndices) {
+				if (idx < reliableWindowStart)
+					this.receivedReliableFrameIndices.delete(idx);
+			}
+		}
+
+		for (const [splitId, entry] of this.fragmentsQueue) {
+			if (now - entry.timestamp > NetworkSession.FRAGMENT_TIMEOUT_MS) {
+				Logger.warn(
+					`Fragment queue ${splitId} timed out, dropping ${entry.frames.size} fragments`,
+				);
+				this.fragmentsQueue.delete(splitId);
+			}
+		}
+
+		if (this.pendingAcks.size > 0) {
+			const ackSeqs = Array.from(this.pendingAcks);
+			this.pendingAcks.clear();
 			const ack = new Ack();
 			ack.sequences = ackSeqs;
 			this.send(ack.serialize());
@@ -164,37 +208,66 @@ export class NetworkSession {
 	}
 
 	public onFrameSet(frameSet: FrameSet) {
+		// Already received this exact sequence so ignore duplicate
 		if (this.receivedFrameSequences.has(frameSet.sequence)) {
-			throw new Error("Duplicate frame set received");
+			Logger.warn(
+				`Duplicate frame set received: sequence ${frameSet.sequence}`,
+			);
+			return;
 		}
 
+		// Remove from lost if we finally got it
 		this.lostFrameSequences.delete(frameSet.sequence);
-		const isLess = frameSet.sequence < this.lastInputSequence;
-		const isEqual = frameSet.sequence === this.lastInputSequence;
 
-		if (isLess || isEqual) {
-			throw new Error("Frame set received is out of order");
-		}
-
+		// Track this sequence as received and queue ACK
 		this.receivedFrameSequences.add(frameSet.sequence);
-		const diff = frameSet.sequence - this.lastInputSequence;
+		this.pendingAcks.add(frameSet.sequence);
 
-		if (diff > 1) {
-			for (
-				let index = this.lastInputSequence + 1;
-				index < frameSet.sequence;
-				index++
-			)
-				this.lostFrameSequences.add(index);
+		// If this is a newer sequence than we've seen, update tracking
+		if (frameSet.sequence > this.lastInputSequence) {
+			const diff = frameSet.sequence - this.lastInputSequence;
+
+			// Mark any gaps as lost (for NACK)
+			if (diff > 1) {
+				for (
+					let index = this.lastInputSequence + 1;
+					index < frameSet.sequence;
+					index++
+				) {
+					// Only mark as lost if we haven't already received it
+					if (!this.receivedFrameSequences.has(index)) {
+						this.lostFrameSequences.add(index);
+					}
+				}
+			}
+
+			this.lastInputSequence = frameSet.sequence;
+		} else {
+			// zOut-of-order packet (arrived late but still valid)
+			Logger.warn(
+				`Out-of-order frame set received: sequence ${frameSet.sequence} (expected > ${this.lastInputSequence})`,
+			);
 		}
 
-		this.lastInputSequence = frameSet.sequence;
+		// Process all frames
 		for (const frame of frameSet.frames) {
 			this.handleFrame(frame);
 		}
 	}
 
 	public handleFrame(frame: Frame): void {
+		// Duplicate detection for reliable frames
+		if (frame.isReliable()) {
+			if (this.receivedReliableFrameIndices.has(frame.reliableFrameIndex)) {
+				// Already processed tsis reliable frame, skip
+				return;
+			}
+			this.receivedReliableFrameIndices.add(frame.reliableFrameIndex);
+			if (frame.reliableFrameIndex > this.highestReliableIndex) {
+				this.highestReliableIndex = frame.reliableFrameIndex;
+			}
+		}
+
 		if (frame.isSplit()) {
 			this.handleSplitFrame(frame);
 		} else if (frame.isSequenced()) {
@@ -210,77 +283,97 @@ export class NetworkSession {
 		const splitId = frame.splitId;
 		let entry = this.fragmentsQueue.get(splitId);
 		if (!entry) {
-			entry = new Map<number, Frame>();
+			entry = { frames: new Map<number, Frame>(), timestamp: Date.now() };
 			this.fragmentsQueue.set(splitId, entry);
 		}
-		entry.set(frame.splitFrameIndex, frame);
-		if (entry.size === frame.splitSize) {
-			{
-				const stream = new BinaryStream();
-				for (let index = 0; index < frame.splitSize; index++) {
-					const sframe = entry.get(index);
-					if (!sframe) {
-						throw new Error(
-							`Missing fragment at index ${index} for splitId=${frame.splitId}`,
-						);
-					}
-					stream.write(sframe.payload);
+		entry.frames.set(frame.splitFrameIndex, frame);
+		if (entry.frames.size === frame.splitSize) {
+			const stream = new BinaryStream();
+			for (let index = 0; index < frame.splitSize; index++) {
+				const sframe = entry.frames.get(index);
+				if (!sframe) {
+					Logger.warn(
+						`Missing fragment at index ${index} for splitId=${frame.splitId}`,
+					);
+					this.fragmentsQueue.delete(splitId);
+					return;
 				}
-				const reassembledFrame = new Frame();
-				reassembledFrame.reliability = frame.reliability;
-				reassembledFrame.reliableFrameIndex = frame.reliableFrameIndex;
-				reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
-				reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
-				reassembledFrame.orderChannel = frame.orderChannel;
-				reassembledFrame.payload = stream.getBuffer();
-				this.handleFrame(reassembledFrame);
+				stream.write(sframe.payload);
 			}
+			const reassembledFrame = new Frame();
+			reassembledFrame.reliability = frame.reliability;
+			reassembledFrame.reliableFrameIndex = frame.reliableFrameIndex;
+			reassembledFrame.sequenceFrameIndex = frame.sequenceFrameIndex;
+			reassembledFrame.orderedFrameIndex = frame.orderedFrameIndex;
+			reassembledFrame.orderChannel = frame.orderChannel;
+			reassembledFrame.payload = stream.getBuffer();
+
 			this.fragmentsQueue.delete(splitId);
+
+			// Process the reassembled frame (but skip split handling since it's no longer split)
+			if (reassembledFrame.isSequenced()) {
+				this.handleSequenced(reassembledFrame);
+			} else if (reassembledFrame.isOrdered()) {
+				this.handleOrdered(reassembledFrame);
+			} else {
+				this.handle(reassembledFrame.payload);
+			}
 		}
 	}
 
 	public handleSequenced(frame: Frame): void {
 		const channel = frame.orderChannel;
-		const currentHighestSequence = this.inputHighestSequenceIndex[channel];
-		const isLess = frame.sequenceFrameIndex < currentHighestSequence;
-		if (isLess || frame.orderedFrameIndex === this.inputOrderIndex[channel]) {
-			Logger.warn(
-				"Frame dropped, sequence is less than current highest sequence",
-			);
+		const currentHighestSequence = this.inputHighestSequenceIndex[channel] ?? 0;
+
+		// Sequenced frames: drop if older than what we've seen, otherwise process immediately
+		// They don't need ordering, just drop stale ones
+		if (frame.sequenceFrameIndex < currentHighestSequence) {
+			// Old sequenced frame, drop it
 			return;
 		}
+
 		this.inputHighestSequenceIndex[channel] = frame.sequenceFrameIndex + 1;
 		this.handle(frame.payload);
 	}
 
 	public handleOrdered(frame: Frame): void {
 		const channel = frame.orderChannel;
-		const expectedOrderIndex = this.inputOrderIndex[channel];
-		const isEqual = frame.orderedFrameIndex === expectedOrderIndex;
+		const expectedOrderIndex = this.inputOrderIndex[channel] ?? 0;
 
-		if (frame.orderedFrameIndex > expectedOrderIndex) {
-			const unordered = this.inputOrderingQueue.get(channel);
-			if (!unordered) {
-				Logger.warn("No unordered queue found");
-				return;
-			}
-			unordered.set(frame.orderedFrameIndex, frame);
-		} else if (isEqual) {
-			this.inputHighestSequenceIndex[frame.orderChannel] = 0;
-			this.inputOrderIndex[frame.orderChannel] = frame.orderedFrameIndex + 1;
+		if (frame.orderedFrameIndex === expectedOrderIndex) {
+			// This is the frame we're waiting for - process it
+			this.inputHighestSequenceIndex[channel] = 0;
+			this.inputOrderIndex[channel] = expectedOrderIndex + 1;
 			this.handle(frame.payload);
-			let index = this.inputOrderIndex[frame.orderChannel] as number;
-			const outOfOrderQueue = this.inputOrderingQueue.get(
-				frame.orderChannel,
-			) as Map<number, Frame>;
-			for (; outOfOrderQueue.has(index); index++) {
-				const frame = outOfOrderQueue.get(index);
-				if (!frame) break;
-				this.handle(frame.payload);
-				outOfOrderQueue.delete(index);
+
+			// Now flush any queued frames that are now in order
+			const outOfOrderQueue = this.inputOrderingQueue.get(channel);
+			if (outOfOrderQueue) {
+				let nextIndex = expectedOrderIndex + 1;
+				while (outOfOrderQueue.has(nextIndex)) {
+					const queuedFrame = outOfOrderQueue.get(nextIndex);
+					if (queuedFrame) {
+						this.handle(queuedFrame.payload);
+						outOfOrderQueue.delete(nextIndex);
+					}
+					nextIndex++;
+				}
+				this.inputOrderIndex[channel] = nextIndex;
 			}
-			this.inputOrderingQueue.set(frame.orderChannel, outOfOrderQueue);
-			this.inputOrderIndex[frame.orderChannel] = index;
+		} else if (frame.orderedFrameIndex > expectedOrderIndex) {
+			// Future frame n queue it for later
+			const outOfOrderQueue = this.inputOrderingQueue.get(channel);
+			if (outOfOrderQueue) {
+				// Prevent unbounded queue growth
+				if (outOfOrderQueue.size < NetworkSession.ORDER_QUEUE_MAX_SIZE) {
+					outOfOrderQueue.set(frame.orderedFrameIndex, frame);
+				} else {
+					Logger.warn(
+						`Order queue for channel ${channel} is full, dropping frame ${frame.orderedFrameIndex}`,
+					);
+				}
+			}
 		}
+		// If frame.orderedFrameIndex < expectedOrderIndex, it's a duplicate/old frame - ignore it
 	}
 }

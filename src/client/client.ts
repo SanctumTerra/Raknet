@@ -52,6 +52,7 @@ export class Client extends EventEmitter<ClientEvents> {
 	private proxyReady = false;
 
 	private lastPongTime: number = Date.now();
+	private lastActivityTime: number = Date.now();
 	private isDisconnected = false;
 
 	constructor(options: Partial<ClientOptions> = {}) {
@@ -319,9 +320,9 @@ export class Client extends EventEmitter<ClientEvents> {
 				this.sendConnectedPing();
 			}
 
-			// Check for stale connection
-			const timeSinceLastPong = Date.now() - this.lastPongTime;
-			if (timeSinceLastPong > Client.STALE_TIMEOUT_MS) {
+			// Check for stale connection (no activity at all)
+			const timeSinceLastActivity = Date.now() - this.lastActivityTime;
+			if (timeSinceLastActivity > Client.STALE_TIMEOUT_MS) {
 				this.handleDisconnect("Connection timed out (stale)");
 				return;
 			}
@@ -406,23 +407,19 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.FrameSet: {
-				try {
-					const frameSet = new FrameSet(actualData).deserialize();
-					this.session.onFrameSet(frameSet);
-				} catch (error) {
-					const message =
-						error instanceof Error ? error.message : "Unknown error";
-					Logger.error(`Frame set error: ${message}`);
-					this.handleDisconnect(`Frame set error: ${message}`);
-				}
+				this.lastActivityTime = Date.now();
+				const frameSet = new FrameSet(actualData).deserialize();
+				this.session.onFrameSet(frameSet);
 				break;
 			}
 			case Packets.Ack: {
+				this.lastActivityTime = Date.now();
 				const ack = new Ack(actualData).deserialize();
 				this.session.onAck(ack);
 				break;
 			}
 			case Packets.Nack: {
+				this.lastActivityTime = Date.now();
 				const nack = new Ack(actualData).deserialize();
 				this.session.onNack(nack);
 				break;
@@ -472,7 +469,9 @@ export class Client extends EventEmitter<ClientEvents> {
 				this.frameAndSend(nic.serialize(), Priority.High);
 				this.status = ConnectionStatus.Connected;
 				this.lastPongTime = Date.now(); // Reset stale timer on connect
+				this.lastActivityTime = Date.now();
 				this.emit("connect");
+				console.log("Raknet Connected");
 				break;
 			}
 			default: {
