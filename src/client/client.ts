@@ -32,7 +32,7 @@ import { connect as netConnect, type Socket as NetSocket } from "node:net";
 import { lookup } from "node:dns/promises";
 
 export class Client extends EventEmitter<ClientEvents> {
-	private static readonly MTU_VALUES = [1492, 1400, 1028, 1200, 576];
+	private static readonly MTU_VALUES = [1400, 1200, 1028, 576, 1492];
 	private static readonly MTU_RETRY_INTERVAL = 500;
 	private static readonly STALE_TIMEOUT_MS = 10000; // 10 seconds without pong = stale
 	private static readonly PING_INTERVAL_TICKS = 100; // Send connected ping every ~2 seconds at 50 tick rate
@@ -61,17 +61,24 @@ export class Client extends EventEmitter<ClientEvents> {
 		this.status = ConnectionStatus.Disconnected;
 		this.tick = 0;
 		this.socket = createSocket("udp4");
-		this.socket.bind();
 		this.interval = setInterval(
 			this.onTick.bind(this),
 			1000 / this.options.tickRate,
 		);
 		this.socket.on("message", this.onMessage.bind(this));
+		this.socket.on("error", (err) => {
+			Logger.error(`Socket error: ${err.message}`);
+		});
 		this.session = new NetworkSession(this.options.mtu, this.options.debug);
 		this.session.send = this.send.bind(this);
 		this.session.handle = (data: Buffer) => {
 			this.handleOnline(data);
 		};
+
+		// Enable debug logging if debug option is set
+		if (this.options.debug) {
+			Logger.debugEnabled = true;
+		}
 	}
 
 	private async setupProxy(): Promise<void> {
@@ -257,6 +264,12 @@ export class Client extends EventEmitter<ClientEvents> {
 	}
 
 	public async connect(): Promise<void> {
+		// Ensure socket is bound and ready
+		await new Promise<void>((resolve) => {
+			this.socket.once("listening", () => resolve());
+			this.socket.bind();
+		});
+
 		if (this.options.proxy) {
 			await this.setupProxy();
 		}
@@ -276,9 +289,10 @@ export class Client extends EventEmitter<ClientEvents> {
 			let retryTimeout: NodeJS.Timeout | null = null;
 
 			// Use configured MTU or fall back to default values
-			const mtuValues = this.options.mtu
-				? [this.options.mtu]
-				: Client.MTU_VALUES;
+			const mtuValues =
+				this.options.mtu && this.options.mtu > 0
+					? [this.options.mtu]
+					: Client.MTU_VALUES;
 
 			const sendRequest = () => {
 				if (mtuIndex >= mtuValues.length) {
@@ -292,10 +306,14 @@ export class Client extends EventEmitter<ClientEvents> {
 				const request = new OpenConnectionRequestOne();
 				request.mtu = mtu;
 				request.protocol = 11;
+				if (this.options.debug) {
+					Logger.debug(`Sending OpenConnectionRequestOne with MTU ${mtu}`);
+				}
 				this.send(request.serialize());
 
 				retryTimeout = setTimeout(() => {
 					if (!this.gotReply1) {
+						Logger.warn(`No reply for MTU ${mtu}, trying next value...`);
 						mtuIndex++;
 						sendRequest();
 					}
@@ -389,6 +407,12 @@ export class Client extends EventEmitter<ClientEvents> {
 		let id = actualData[0];
 		const isOnline = (id & 0xf0) === 0x80;
 		if (isOnline) id = 0x80;
+
+		if (this.options.debug) {
+			Logger.debug(
+				`Received packet ID: 0x${id?.toString(16).padStart(2, "0")} from ${rinfo.address}:${rinfo.port}`,
+			);
+		}
 
 		switch (id) {
 			case Packets.UnconnectedPong: {

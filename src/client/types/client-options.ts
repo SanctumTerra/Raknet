@@ -21,7 +21,7 @@ export const generateGuid = (): bigint =>
 	BigInt(Math.floor(Date.now() + Math.random() * 10000000));
 
 export const createDefaultClientOptions = (): ClientOptions => ({
-	mtu: 1492,
+	mtu: 0, // 0 means use MTU_VALUES array
 	address: "127.0.0.1",
 	port: 19132,
 	guid: generateGuid(),
