@@ -109,14 +109,14 @@ export class NetworkSession {
 	}
 
 	onAck(ack: Ack) {
-		Logger.info(`ACK received: ${ack.sequences.join(", ")}`);
+		Logger.debug(`ACK received: ${ack.sequences.join(", ")}`);
 		for (let i = 0, len = ack.sequences.length; i < len; i++) {
 			this.outputBackup.delete(ack.sequences[i]);
 		}
 	}
 
 	onNack(nack: Ack) {
-		Logger.info(
+		Logger.debug(
 			`Received NACK for sequences: ${nack.sequences.join(", ")} - resending`,
 		);
 		for (let i = 0, len = nack.sequences.length; i < len; i++) {
@@ -210,7 +210,7 @@ export class NetworkSession {
 	 * Send split frames - each in its own frameset with small delays to ensure ordering
 	 */
 	public sendSplitFrames(frames: Frame[], priority: Priority) {
-		Logger.info(`Sending ${frames.length} split frames`);
+		Logger.debug(`Sending ${frames.length} split frames`);
 
 		// Send first frame immediately
 		const sendFrame = (index: number) => {
@@ -224,7 +224,7 @@ export class NetworkSession {
 			this.outputBackup.set(frameset.sequence, [frame]);
 
 			const buffer = frameset.serialize();
-			Logger.info(
+			Logger.debug(
 				`Split ${index + 1}/${frames.length} sent (seq: ${frameset.sequence}, size: ${buffer.length})`,
 			);
 			this.send(buffer);
