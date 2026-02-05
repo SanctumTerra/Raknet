@@ -39,7 +39,8 @@ export class NetworkSession {
 	private static readonly RECEIVE_WINDOW_SIZE = 2048;
 	private static readonly RELIABLE_WINDOW_SIZE = 4096;
 	private static readonly FRAGMENT_TIMEOUT_MS = 30000;
-	private static readonly ORDER_QUEUE_MAX_SIZE = 256;
+	private static readonly ORDER_QUEUE_MAX_SIZE = 1024;
+	private static readonly ORDER_QUEUE_SKIP_THRESHOLD = 512;
 
 	constructor(mtu: number, debug = false) {
 		this.mtu = mtu;
@@ -108,12 +109,16 @@ export class NetworkSession {
 	}
 
 	onAck(ack: Ack) {
+		Logger.info(`ACK received: ${ack.sequences.join(", ")}`);
 		for (let i = 0, len = ack.sequences.length; i < len; i++) {
 			this.outputBackup.delete(ack.sequences[i]);
 		}
 	}
 
 	onNack(nack: Ack) {
+		Logger.info(
+			`Received NACK for sequences: ${nack.sequences.join(", ")} - resending`,
+		);
 		for (let i = 0, len = nack.sequences.length; i < len; i++) {
 			const seq = nack.sequences[i];
 			const lostFrames = this.outputBackup.get(seq);
@@ -153,6 +158,8 @@ export class NetworkSession {
 			const splitSize = Math.ceil(payloadSize / maxSize);
 			const splitId = this.outputSplitIndex++ & 0xffff;
 
+			// Queue all split frames first
+			const splitFrames: Frame[] = [];
 			for (let i = 0; i < splitSize; i++) {
 				const index = i * maxSize;
 				const nF = new Frame();
@@ -172,8 +179,11 @@ export class NetworkSession {
 				nF.splitFrameIndex = i;
 				nF.splitId = splitId;
 				nF.splitSize = splitSize;
-				this.queueFrame(nF, priority);
+				splitFrames.push(nF);
 			}
+
+			// Send all split frames together in one batch
+			this.sendSplitFrames(splitFrames, priority);
 		} else {
 			if (frame.isReliable()) {
 				frame.reliableFrameIndex = this.outputReliableIndex++;
@@ -184,13 +194,48 @@ export class NetworkSession {
 
 	public queueFrame(frame: Frame, priority: Priority) {
 		let length = 4;
-		for (const frame of this.outputFrames) length += frame.getByteLength();
+		for (const f of this.outputFrames) length += f.getByteLength();
 
 		if (length + frame.getByteLength() > this.mtu - MTU_HEADER_SIZE)
 			this.sendQueue(this.outputFrames.size);
 
 		this.outputFrames.add(frame);
-		if (priority === Priority.High) this.sendQueue(1);
+
+		// For high priority, send all queued frames immediately (not just 1)
+		// This ensures split frames go out together
+		if (priority === Priority.High) this.sendQueue(this.outputFrames.size);
+	}
+
+	/**
+	 * Send split frames - each in its own frameset with small delays to ensure ordering
+	 */
+	public sendSplitFrames(frames: Frame[], priority: Priority) {
+		Logger.info(`Sending ${frames.length} split frames`);
+
+		// Send first frame immediately
+		const sendFrame = (index: number) => {
+			if (index >= frames.length) return;
+
+			const frame = frames[index];
+			const frameset = new FrameSet();
+			frameset.sequence = this.outputSequence++;
+			frameset.frames = [frame];
+
+			this.outputBackup.set(frameset.sequence, [frame]);
+
+			const buffer = frameset.serialize();
+			Logger.info(
+				`Split ${index + 1}/${frames.length} sent (seq: ${frameset.sequence}, size: ${buffer.length})`,
+			);
+			this.send(buffer);
+
+			// Send next frame after a small delay to ensure ordering
+			if (index + 1 < frames.length) {
+				setTimeout(() => sendFrame(index + 1), 5);
+			}
+		};
+
+		sendFrame(0);
 	}
 
 	public sendQueue(amount: number): void {
@@ -203,6 +248,15 @@ export class NetworkSession {
 		this.outputBackup.set(frameset.sequence, frameset.frames);
 
 		for (const frame of frameset.frames) this.outputFrames.delete(frame);
+
+		// Log what we're sending
+		for (const frame of frameset.frames) {
+			if (frame.isSplit()) {
+				Logger.info(
+					`Sending split frame ${frame.splitFrameIndex}/${frame.splitSize} (splitId: ${frame.splitId}, seq: ${frameset.sequence}, reliable: ${frame.reliableFrameIndex})`,
+				);
+			}
+		}
 
 		const buffer = frameset.serialize();
 
@@ -367,10 +421,25 @@ export class NetworkSession {
 				this.inputOrderIndex[channel] = nextIndex;
 			}
 		} else if (frame.orderedFrameIndex > expectedOrderIndex) {
-			// Future frame n queue it for later
+			const gap = frame.orderedFrameIndex - expectedOrderIndex;
+
+			// If we're way too far behind, skip ahead to avoid infinite queue buildup
+			if (gap > NetworkSession.ORDER_QUEUE_SKIP_THRESHOLD) {
+				if (this.debug)
+					Logger.debug(
+						`Order queue for channel ${channel} skipping ahead from ${expectedOrderIndex} to ${frame.orderedFrameIndex} (gap: ${gap})`,
+					);
+				// Clear the queue and skip to this frame
+				const outOfOrderQueue = this.inputOrderingQueue.get(channel);
+				if (outOfOrderQueue) outOfOrderQueue.clear();
+				this.inputOrderIndex[channel] = frame.orderedFrameIndex + 1;
+				this.handle(frame.payload);
+				return;
+			}
+
+			// Future frame - queue it for later
 			const outOfOrderQueue = this.inputOrderingQueue.get(channel);
 			if (outOfOrderQueue) {
-				// Prevent unbounded queue growth
 				if (outOfOrderQueue.size < NetworkSession.ORDER_QUEUE_MAX_SIZE) {
 					outOfOrderQueue.set(frame.orderedFrameIndex, frame);
 				} else {

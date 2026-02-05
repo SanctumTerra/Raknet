@@ -264,17 +264,29 @@ export class Client extends EventEmitter<ClientEvents> {
 		this.status = ConnectionStatus.Connecting;
 		this.gotReply1 = false;
 
+		// Reset session state for fresh connection
+		this.session = new NetworkSession(this.options.mtu, this.options.debug);
+		this.session.send = this.send.bind(this);
+		this.session.handle = (data: Buffer) => {
+			this.handleOnline(data);
+		};
+
 		return new Promise((resolve, reject) => {
 			let mtuIndex = 0;
 			let retryTimeout: NodeJS.Timeout | null = null;
 
+			// Use configured MTU or fall back to default values
+			const mtuValues = this.options.mtu
+				? [this.options.mtu]
+				: Client.MTU_VALUES;
+
 			const sendRequest = () => {
-				if (mtuIndex >= Client.MTU_VALUES.length) {
+				if (mtuIndex >= mtuValues.length) {
 					reject(new Error("Connection timed out, all MTU values exhausted"));
 					return;
 				}
 
-				const mtu = Client.MTU_VALUES[mtuIndex];
+				const mtu = mtuValues[mtuIndex];
 				if (!mtu) throw new Error("MTU value is undefined");
 
 				const request = new OpenConnectionRequestOne();
@@ -399,6 +411,7 @@ export class Client extends EventEmitter<ClientEvents> {
 			case Packets.OpenConnectionReply2: {
 				const reply2 = new OpenConnectionReplyTwo(actualData).deserialize();
 				// Update session MTU with the negotiated value from server
+				Logger.info(`MTU negotiated: ${reply2.mtu} (was ${this.session.mtu})`);
 				this.session.mtu = reply2.mtu;
 				const request = new ConnectionRequest();
 				request.guid = this.options.guid;
@@ -471,7 +484,6 @@ export class Client extends EventEmitter<ClientEvents> {
 				this.lastPongTime = Date.now(); // Reset stale timer on connect
 				this.lastActivityTime = Date.now();
 				this.emit("connect");
-				console.log("Raknet Connected");
 				break;
 			}
 			default: {
