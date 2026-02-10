@@ -399,7 +399,6 @@ export class NetworkSession {
 	public handleOrdered(frame: Frame): void {
 		const channel = frame.orderChannel;
 		const expectedOrderIndex = this.inputOrderIndex[channel] ?? 0;
-
 		if (frame.orderedFrameIndex === expectedOrderIndex) {
 			// This is the frame we're waiting for - process it
 			this.inputHighestSequenceIndex[channel] = 0;

@@ -264,11 +264,14 @@ export class Client extends EventEmitter<ClientEvents> {
 	}
 
 	public async connect(): Promise<void> {
-		// Ensure socket is bound and ready
-		await new Promise<void>((resolve) => {
-			this.socket.once("listening", () => resolve());
-			this.socket.bind();
-		});
+		// Ensure socket is bound and ready (only bind if not already bound)
+		const address = this.socket.address();
+		if (!address) {
+			await new Promise<void>((resolve) => {
+				this.socket.once("listening", () => resolve());
+				this.socket.bind();
+			});
+		}
 
 		if (this.options.proxy) {
 			await this.setupProxy();
@@ -353,6 +356,11 @@ export class Client extends EventEmitter<ClientEvents> {
 			// Check for stale connection (no activity at all)
 			const timeSinceLastActivity = Date.now() - this.lastActivityTime;
 			if (timeSinceLastActivity > Client.STALE_TIMEOUT_MS) {
+				if (this.options.debug) {
+					Logger.warn(
+						`Connection stale: ${timeSinceLastActivity}ms since last activity (threshold: ${Client.STALE_TIMEOUT_MS}ms)`,
+					);
+				}
 				this.handleDisconnect("Connection timed out (stale)");
 				return;
 			}
@@ -471,21 +479,35 @@ export class Client extends EventEmitter<ClientEvents> {
 	public handleOnline(data: Buffer) {
 		const id = data[0];
 
+		if (this.options.debug && id !== 254) {
+			Logger.debug(`handleOnline: packet ID 0x${id.toString(16).padStart(2, "0")}`);
+		}
+
 		switch (id) {
 			case 254: {
+				this.lastActivityTime = Date.now();
 				this.emit("encapsulated", data);
 				break;
 			}
 			case Packets.ConnectedPong: {
+				if (this.options.debug) {
+					Logger.debug("Received ConnectedPong");
+				}
 				this.lastPongTime = Date.now();
+				this.lastActivityTime = Date.now(); // Count pong as activity
 				break;
 			}
 			case Packets.ConnectedPing: {
+				if (this.options.debug) {
+					Logger.debug("Received ConnectedPing from server, sending pong...");
+				}
+				this.lastActivityTime = Date.now(); // Count ping as activity
 				const ping = new ConnectedPing(data).deserialize();
 				const pong = new ConnectedPong();
 				pong.pingTimestamp = ping.timestamp;
 				pong.pongTimestamp = BigInt(Date.now());
-				this.frameAndSend(pong.serialize(), Priority.High);
+				const pongBuffer = pong.serialize();
+				this.frameAndSend(pongBuffer, Priority.High);
 				break;
 			}
 			case Packets.Disconnect: {
