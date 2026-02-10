@@ -480,7 +480,9 @@ export class Client extends EventEmitter<ClientEvents> {
 		const id = data[0];
 
 		if (this.options.debug && id !== 254) {
-			Logger.debug(`handleOnline: packet ID 0x${id.toString(16).padStart(2, "0")}`);
+			Logger.debug(
+				`handleOnline: packet ID 0x${id.toString(16).padStart(2, "0")}`,
+			);
 		}
 
 		switch (id) {
