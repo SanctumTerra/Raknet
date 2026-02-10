@@ -264,15 +264,6 @@ export class Client extends EventEmitter<ClientEvents> {
 	}
 
 	public async connect(): Promise<void> {
-		// Ensure socket is bound and ready (only bind if not already bound)
-		const address = this.socket.address();
-		if (!address) {
-			await new Promise<void>((resolve) => {
-				this.socket.once("listening", () => resolve());
-				this.socket.bind();
-			});
-		}
-
 		if (this.options.proxy) {
 			await this.setupProxy();
 		}
