@@ -155,9 +155,7 @@ export class Client extends EventEmitter<ClientEvents> {
 
 					this.proxySocket = socket;
 					this.proxyRelayHost =
-						relay.host === "0.0.0.0"
-							? (this.resolvedAddress ?? proxy.host)
-							: relay.host;
+						relay.host === "0.0.0.0" ? proxy.host : relay.host;
 					this.proxyRelayPort = relay.port;
 					this.proxyReady = true;
 					state = "done";
@@ -169,9 +167,14 @@ export class Client extends EventEmitter<ClientEvents> {
 				if (state !== "done") {
 					reject(new Error("SOCKS5 connection closed unexpectedly"));
 				} else {
+					// TCP control connection closed — per RFC 1928, the UDP association is now dead
+					this.proxyReady = false;
 					this.proxySocket = null;
 					this.proxyRelayHost = null;
 					this.proxyRelayPort = null;
+					if (!this.isDisconnected) {
+						this.handleDisconnect("SOCKS5 control connection closed");
+					}
 				}
 			});
 
@@ -202,6 +205,17 @@ export class Client extends EventEmitter<ClientEvents> {
 			return {
 				host: data.subarray(5, 5 + len).toString("utf8"),
 				port: data.readUInt16BE(5 + len),
+			};
+		}
+
+		if (atyp === 0x04 && data.length >= 22) {
+			const parts: string[] = [];
+			for (let i = 0; i < 8; i++) {
+				parts.push(data.readUInt16BE(4 + i * 2).toString(16));
+			}
+			return {
+				host: parts.join(":"),
+				port: data.readUInt16BE(20),
 			};
 		}
 
@@ -260,6 +274,19 @@ export class Client extends EventEmitter<ClientEvents> {
 			};
 		}
 
+		if (atyp === 4 && data.length >= 22) {
+			// IPv6: 16 bytes address + 2 bytes port
+			const parts: string[] = [];
+			for (let i = 0; i < 8; i++) {
+				parts.push(data.readUInt16BE(4 + i * 2).toString(16));
+			}
+			return {
+				host: parts.join(":"),
+				port: data.readUInt16BE(20),
+				dataOffset: 22,
+			};
+		}
+
 		return null;
 	}
 
@@ -281,6 +308,7 @@ export class Client extends EventEmitter<ClientEvents> {
 		return new Promise((resolve, reject) => {
 			let mtuIndex = 0;
 			let retryTimeout: NodeJS.Timeout | null = null;
+			let settled = false;
 
 			// Use configured MTU or fall back to default values
 			const mtuValues =
@@ -288,8 +316,20 @@ export class Client extends EventEmitter<ClientEvents> {
 					? [this.options.mtu]
 					: Client.MTU_VALUES;
 
+			const cleanup = () => {
+				settled = true;
+				if (retryTimeout) {
+					clearTimeout(retryTimeout);
+					retryTimeout = null;
+				}
+			};
+
 			const sendRequest = () => {
+				// Stop if we already got Reply1 or the connection settled
+				if (this.gotReply1 || settled) return;
+
 				if (mtuIndex >= mtuValues.length) {
+					cleanup();
 					reject(new Error("Connection timed out, all MTU values exhausted"));
 					return;
 				}
@@ -306,7 +346,7 @@ export class Client extends EventEmitter<ClientEvents> {
 				this.send(request.serialize());
 
 				retryTimeout = setTimeout(() => {
-					if (!this.gotReply1) {
+					if (!this.gotReply1 && !settled) {
 						Logger.warn(`No reply for MTU ${mtu}, trying next value...`);
 						mtuIndex++;
 						sendRequest();
@@ -315,13 +355,15 @@ export class Client extends EventEmitter<ClientEvents> {
 			};
 
 			const timeout = setTimeout(() => {
-				if (retryTimeout) clearTimeout(retryTimeout);
-				reject(new Error("Connection timed out"));
+				if (!settled) {
+					cleanup();
+					reject(new Error("Connection timed out"));
+				}
 			}, this.options.timeout);
 
 			this.once("connect", () => {
 				clearTimeout(timeout);
-				if (retryTimeout) clearTimeout(retryTimeout);
+				cleanup();
 				resolve();
 			});
 
@@ -420,10 +462,19 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.OpenConnectionReply1: {
+				// Ignore duplicate Reply1s — only process the first one
+				if (this.gotReply1) break;
 				this.gotReply1 = true;
 				const reply = new OpenConnectionReplyOne(actualData).deserialize();
 				const request = new OpenConnectionRequestTwo();
-				request.address = Address.fromIdentifier(rinfo);
+				// When proxied, rinfo is the relay — use the actual target server address
+				request.address = this.proxyRelayHost
+					? new Address(
+							this.resolvedAddress || this.options.address,
+							this.options.port,
+							4,
+						)
+					: Address.fromIdentifier(rinfo);
 				request.mtu = reply.mtu;
 				request.guid = this.options.guid;
 				request.cookie = reply.cookie;
@@ -432,6 +483,8 @@ export class Client extends EventEmitter<ClientEvents> {
 				break;
 			}
 			case Packets.OpenConnectionReply2: {
+				// Ignore if we're already past the handshake
+				if (this.status === ConnectionStatus.Connected) break;
 				const reply2 = new OpenConnectionReplyTwo(actualData).deserialize();
 				// Update session MTU with the negotiated value from server
 				Logger.info(`MTU negotiated: ${reply2.mtu} (was ${this.session.mtu})`);
