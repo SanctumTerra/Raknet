@@ -4,7 +4,6 @@ const client = new Client({
 	address: "donutsmp.net",
 	// address: "127.0.0.1",
 	// address: "geo.hivebedrock.network",
-	
 });
 
 client.on("unconnectedPong", (packet) => {

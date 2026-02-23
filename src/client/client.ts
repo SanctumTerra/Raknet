@@ -34,6 +34,7 @@ import { lookup } from "node:dns/promises";
 export class Client extends EventEmitter<ClientEvents> {
 	private static readonly MTU_VALUES = [1400, 1200, 1028, 576, 1492];
 	private static readonly MTU_RETRY_INTERVAL = 500;
+	private static readonly MTU_RETRIES_PER_VALUE = 2;
 	private static readonly STALE_TIMEOUT_MS = 10000; // 10 seconds without pong = stale
 	private static readonly PING_INTERVAL_TICKS = 100; // Send connected ping every ~2 seconds at 50 tick rate
 
@@ -298,8 +299,14 @@ export class Client extends EventEmitter<ClientEvents> {
 		this.status = ConnectionStatus.Connecting;
 		this.gotReply1 = false;
 
-		// Reset session state for fresh connection
-		this.session = new NetworkSession(this.options.mtu, this.options.debug);
+		// Use configured MTU or fall back to default values
+		const mtuValues =
+			this.options.mtu && this.options.mtu > 0
+				? [this.options.mtu]
+				: Client.MTU_VALUES;
+
+		// Reset session state for fresh connection, initialize with first MTU candidate
+		this.session = new NetworkSession(mtuValues[0] ?? 1400, this.options.debug);
 		this.session.send = this.send.bind(this);
 		this.session.handle = (data: Buffer) => {
 			this.handleOnline(data);
@@ -307,14 +314,9 @@ export class Client extends EventEmitter<ClientEvents> {
 
 		return new Promise((resolve, reject) => {
 			let mtuIndex = 0;
+			let mtuAttempt = 0;
 			let retryTimeout: NodeJS.Timeout | null = null;
 			let settled = false;
-
-			// Use configured MTU or fall back to default values
-			const mtuValues =
-				this.options.mtu && this.options.mtu > 0
-					? [this.options.mtu]
-					: Client.MTU_VALUES;
 
 			const cleanup = () => {
 				settled = true;
@@ -341,14 +343,22 @@ export class Client extends EventEmitter<ClientEvents> {
 				request.mtu = mtu;
 				request.protocol = 11;
 				if (this.options.debug) {
-					Logger.debug(`Sending OpenConnectionRequestOne with MTU ${mtu}`);
+					Logger.debug(
+						`Sending OpenConnectionRequestOne with MTU ${mtu} (attempt ${mtuAttempt + 1}/${Client.MTU_RETRIES_PER_VALUE})`,
+					);
 				}
 				this.send(request.serialize());
 
 				retryTimeout = setTimeout(() => {
 					if (!this.gotReply1 && !settled) {
-						Logger.warn(`No reply for MTU ${mtu}, trying next value...`);
-						mtuIndex++;
+						mtuAttempt++;
+						if (mtuAttempt >= Client.MTU_RETRIES_PER_VALUE) {
+							Logger.warn(
+								`No reply for MTU ${mtu} after ${Client.MTU_RETRIES_PER_VALUE} attempts, trying next value...`,
+							);
+							mtuIndex++;
+							mtuAttempt = 0;
+						}
 						sendRequest();
 					}
 				}, Client.MTU_RETRY_INTERVAL);
